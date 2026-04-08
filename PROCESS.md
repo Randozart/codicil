@@ -129,6 +129,161 @@ codicil-cli/src/main.rs  # UPDATED:
 
 **Next**: Day 4 - FFI integration, database support
 
+### Day 4: FFI Foundation and Middleware (2026-04-08)
+
+**Goal**: Establish FFI infrastructure for web operations, improve middleware
+
+**Delivered**:
+- FFI module in codicil-core for JSON operations
+- codicil-ffi crate for web-specific bindings
+- TOML binding specification for Codicil FFI
+- JSON parsing/stringification helpers
+- FFI stub implementations for HTTP and database
+
+**Files Created**:
+```
+codicil-ffi/
+├── Cargo.toml
+├── bindings/
+│   └── codicil.toml      # FFI bindings spec
+└── src/
+    └── lib.rs            # FFI implementations
+
+codicil-core/src/
+├── ffi.rs                # JSON helpers, FFI types
+└── lib.rs               # Export FFI module
+```
+
+**Key Decisions**:
+1. **FFI as separate crate**: codicil-ffi provides web bindings
+2. **TOML bindings**: Follow Brief's FFI TOML format
+3. **Middleware for I/O**: HTTP/DB happen in middleware, not Brief code
+4. **JSON FFI**: parse_json, to_json available to Brief via FFI
+
+**Test Results**: 12/12 tests passing
+
+**Next**: Day 5 - Full request/response cycle
+
+### Day 5: Full Request/Response Cycle (2026-04-08)
+
+**Goal**: Connect Brief handlers to actual HTTP responses, implement body parsing, query params
+
+**Delivered**:
+- Body extraction from HTTP requests using Axum's `Bytes` body extractor
+- Query param extraction using `Query<HashMap<String, String>>`
+- Proper middleware chaining with error short-circuiting
+- Handler updated to use `brief build` for execution (not just `brief check`)
+- Response parsing from Brief build output (JSON with status, body, headers)
+- All 12 tests passing
+
+**Files Modified**:
+```
+codicil-cli/src/main.rs    # Added body/query extraction, fixed middleware chaining
+codicil-cli/Cargo.toml    # Added bytes dependency
+codicil-core/src/handler.rs  # Use brief build, parse JSON response output
+codicil-core/src/context.rs  # Removed unused import
+```
+
+**Next**: Day 6 - Implement actual HTTP/database FFI
+
+### Day 6: HTTP and Database FFI (2026-04-08)
+
+**Goal**: Implement actual HTTP/database FFI using reqwest/sqlx
+
+**Delivered**:
+- `http_get`: Blocking HTTP GET using reqwest with timeout
+- `http_post`: Blocking HTTP POST with JSON body using reqwest
+- `db_query`: PostgreSQL query execution using sqlx with parameter binding
+- Both sync and async versions of HTTP functions
+- Proper error handling with String error conversion
+- Type inference fixes for sqlx Row iteration
+
+**Files Modified**:
+```
+codicil-ffi/Cargo.toml   # Added reqwest, sqlx, tokio dependencies
+codicil-ffi/src/lib.rs   # Implemented http_get, http_post, db_query
+```
+
+**Key Decisions**:
+1. **Sync over async for FFI**: Brief FFI is synchronous, so we use blocking wrappers with tokio runtime
+2. **Postgres only**: sqlx configured for PostgreSQL (most common for web apps)
+3. **Parameter binding**: Support 0-3+ parameters with type coercion
+
+**Test Results**: 12/12 tests passing
+
+**Next**: Day 7 - Error handling, [error].bv catch-all routes, structured error responses
+
+### Day 7: Error Handling and Error Routes (2026-04-08)
+
+**Goal**: Implement [error].bv catch-all routes, structured error responses
+
+**Delivered**:
+- `ApiError` struct with code, message, details fields and helper constructors
+- `ApiError::to_response()` converts to JSON Response
+- Error route discovery (`[error].bv`) in router
+- `ErrorHandler` for executing error routes with error context
+- Handler errors passed to error routes with `error.code`, `error.message`, `error.details`
+- Default error fallback when no error route exists
+- Fixed router bug: `file_path` now correctly set to actual file path
+
+**Files Modified**:
+```
+codicil-core/src/context.rs   # Added ApiError struct
+codicil-core/src/router.rs   # Added error_route discovery, fixed file_path bug
+codicil-core/src/handler.rs   # Added ErrorHandler, HandlerError is now Clone
+codicil-core/src/lib.rs       # Export ErrorHandler
+codicil-cli/src/main.rs      # Wire error routes in handle_request
+```
+
+**Error Route Format**:
+```brief
+# routes/[error].bv
+txn handle [true][response.status > 0] {
+    term &response {
+        status: error.details.status | 500,
+        body: {
+            code: error.code,
+            message: error.message,
+            details: error.details
+        }
+    };
+};
+```
+
+**Test Results**: 12/12 tests passing
+
+**Next**: Day 8 - Production build command (codi build), optimization, static file serving
+
+### Day 8: Production Build and Static File Serving (2026-04-08)
+
+**Goal**: Production build command, static file serving, optimization
+
+**Delivered**:
+- Improved `codi build` to actually compile routes and output to dist/
+- Route manifest generated (routes compiled, middleware, handlers)
+- Static file serving from public/ directory via fallback_service
+- Copy public/ files to dist/ during build
+- Clean dist/ directory before rebuild
+
+**Files Modified**:
+```
+codicil-cli/Cargo.toml   # Added serde, serde_json dependencies
+codicil-cli/src/main.rs  # Improved cmd_build, static file serving
+```
+
+**Build Output Structure**:
+```
+dist/
+├── manifest.json       # Route manifest with method, path, file, handler, middleware
+├── routes/           # Copied route files
+│   ├── GET.index.bv
+│   └── ...
+└── public/           # Copied static files
+    └── ...
+```
+
+**Test Results**: 12/12 tests passing
+
 ### Day 2: Brief Compiler Integration
 
 **Goal**: Call Brief compiler, parse TOML headers, verify pre/post conditions

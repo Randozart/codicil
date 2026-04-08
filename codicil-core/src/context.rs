@@ -96,4 +96,49 @@ impl Response {
     }
 }
 
-use serde::Serialize;
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ApiError {
+    pub code: String,
+    pub message: String,
+    pub details: Option<serde_json::Value>,
+}
+
+impl ApiError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::new("NOT_FOUND", message)
+    }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::new("BAD_REQUEST", message)
+    }
+
+    pub fn internal_error(message: impl Into<String>) -> Self {
+        Self::new("INTERNAL_ERROR", message)
+    }
+
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self::new("UNAUTHORIZED", message)
+    }
+
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::new("FORBIDDEN", message)
+    }
+
+    pub fn to_response(&self, status: u16) -> Response {
+        Response::json(status, self)
+            .unwrap_or_else(|_| Response::new(status, format!("{}: {}", self.code, self.message)))
+    }
+}

@@ -5,19 +5,23 @@ use std::time::Duration;
 use anyhow::Result;
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, Query, State},
     http::{HeaderMap, Method, StatusCode},
-    response::Response,
+    response::{Response, IntoResponse},
     routing::any,
     Router,
 };
+use tower_http::services::ServeDir;
+use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use tokio::net::TcpListener;
 use tokio::time::interval;
 use codicil_core::{
-    BriefCompiler, Handler, MiddlewareChain, RequestContext, 
+    BriefCompiler, ErrorHandler, Handler, MiddlewareChain, RequestContext, 
     Router as CodicilRouter, RouteFile, is_relevant_file, watch_paths,
 };
+
+const FAVICON_SVG: &str = include_str!("../assets/favicon.svg");
 
 #[derive(Parser)]
 #[command(name = "codi")]
@@ -114,11 +118,13 @@ response.status == 200
 txn handle [true][post] {{
   term &response {{
     status: 200,
-    body: "Hello from Codicil!"
+    body: "<html><head><link rel='icon' type='image/svg+xml' href='/public/favicon.svg'></head><body>Hello from Codicil!</body></html>"
   }};
 }};
 "#;
     fs::write(project_dir.join("routes/GET.index.bv"), index_route)?;
+
+    fs::write(project_dir.join("public/favicon.svg"), FAVICON_SVG)?;
 
     fs::write(project_dir.join("lib/.gitkeep"), "")?;
     fs::write(project_dir.join("middleware/.gitkeep"), "")?;
@@ -138,6 +144,14 @@ JWT_SECRET=your-secret-key
 #[derive(Clone)]
 struct AppState {
     project_path: Arc<PathBuf>,
+}
+
+async fn handle_favicon() -> impl IntoResponse {
+    Response::builder()
+        .status(200)
+        .header("Content-Type", "image/svg+xml")
+        .body(FAVICON_SVG.to_string())
+        .unwrap()
 }
 
 async fn cmd_dev(path: &str) -> Result<()> {
@@ -180,12 +194,16 @@ async fn cmd_dev(path: &str) -> Result<()> {
     println!("\n🚀 Dev server running at http://{}", addr);
     println!("📝 Watching for file changes (Ctrl+C to stop)...\n");
 
-    let mut watcher = watch_paths(&project_path).map_err(|e| anyhow::anyhow!("Failed to watch files: {}", e))?;
+    let watcher = watch_paths(&project_path).map_err(|e| anyhow::anyhow!("Failed to watch files: {}", e))?;
+
+    let public_path = project_path.join("public");
 
     let app = Router::new()
+        .route("/favicon.svg", any(handle_favicon))
         .route("/", any(handle_request))
         .route("/*path", any(handle_request))
-        .with_state(state);
+        .with_state(state)
+        .fallback_service(ServeDir::new(&public_path));
 
     let listener = TcpListener::bind(&addr).await?;
     
@@ -252,6 +270,8 @@ async fn handle_request(
     method: Method,
     headers: HeaderMap,
     AxumPath(path): AxumPath<String>,
+    Query(query_params): Query<std::collections::HashMap<String, String>>,
+    body: Bytes,
 ) -> Response {
     let path = format!("/{}", path);
     
@@ -288,8 +308,9 @@ async fn handle_request(
         }
     };
 
-    let mut ctx = RequestContext::new(method.to_string(), path);
+    let mut ctx = RequestContext::new(method.to_string(), path.clone());
     ctx = ctx.with_params(route_match.params);
+    ctx = ctx.with_query(query_params);
 
     for (key, value) in headers.iter() {
         if let Ok(v) = value.to_str() {
@@ -297,13 +318,28 @@ async fn handle_request(
         }
     }
 
+    let body_str = String::from_utf8_lossy(&body).to_string();
+    ctx = ctx.with_body(body_str);
+
     if !route_file.middleware.is_empty() {
         if let Ok(chain) = MiddlewareChain::from_names(&route_file.middleware, &state.project_path) {
-            let _ = chain.execute(ctx.clone()).await;
+            match chain.execute(ctx).await {
+                Ok(modified_ctx) => {
+                    ctx = modified_ctx;
+                }
+                Err(e) => {
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::from(format!("Middleware error: {}", e)))
+                        .unwrap();
+                }
+            }
         }
     }
 
     let handler = Handler::new(route_file, route_match.route.file_path.clone());
+    let error_route = codicil_router.error_route().cloned();
+
     match handler.execute(ctx).await {
         Ok(response) => {
             let mut builder = Response::builder().status(response.status);
@@ -313,6 +349,20 @@ async fn handle_request(
             builder.body(Body::from(response.body)).unwrap()
         }
         Err(e) => {
+            if let Some(error_path) = error_route {
+                let error_handler = ErrorHandler::new(error_path);
+                let ctx = RequestContext::new(method.to_string(), path.clone());
+                match error_handler.execute(e.clone(), ctx).await {
+                    Ok(response) => {
+                        let mut builder = Response::builder().status(response.status);
+                        for (key, value) in response.headers {
+                            builder = builder.header(&key, &value);
+                        }
+                        return builder.body(Body::from(response.body)).unwrap();
+                    }
+                    Err(_) => {}
+                }
+            }
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from(format!("Handler error: {}", e)))
@@ -323,33 +373,117 @@ async fn handle_request(
 
 fn cmd_build(path: &str) -> Result<()> {
     use codicil_core::Router as CodicilRouter;
+    use std::fs::{self, File};
+    use std::io::Write;
 
     let project_path = Path::new(path);
+    let dist_path = project_path.join("dist");
+    let public_path = project_path.join("public");
+
     let router = CodicilRouter::discover_routes(project_path)?;
     let routes: Vec<_> = router.routes().collect();
 
-    println!("📦 Building {} routes...", routes.len());
-    
+    println!("📦 Building project...");
+    println!("  Found {} routes", routes.len());
+
+    if dist_path.exists() {
+        fs::remove_dir_all(&dist_path)?;
+    }
+    fs::create_dir_all(&dist_path)?;
+    fs::create_dir_all(dist_path.join("routes"))?;
+    fs::create_dir_all(dist_path.join("public"))?;
+
+    let mut route_manifest: Vec<serde_json::Value> = Vec::new();
+
     for route in &routes {
-        println!("  Compiling {} {}", format!("{:?}", route.method), route.path);
+        print!("  Building {} {}", format!("{:?}", route.method), route.path);
         
         let route_file = match RouteFile::parse(&route.file_path) {
             Ok(rf) => rf,
             Err(e) => {
-                println!("  ❌ Failed to parse: {}", e);
+                println!(" ❌");
+                eprintln!("    Failed to parse: {}", e);
                 continue;
             }
         };
-        
-        if let Ok(_) = BriefCompiler::new() {
-            println!("  ✓ Compiled successfully");
-        } else {
-            println!("  ⚠️  Brief compiler not found - skipping");
+
+        let brief_code = &route_file.brief_code;
+        if brief_code.trim().is_empty() {
+            println!(" (empty - skipping)");
+            continue;
+        }
+
+        let compiler = match BriefCompiler::new() {
+            Ok(c) => c,
+            Err(_) => {
+                println!(" ⚠️  Brief compiler not found");
+                continue;
+            }
+        };
+
+        let result = compiler.build(&route.file_path);
+        match result {
+            Ok(build_result) => {
+                if build_result.success {
+                    let out_path = dist_path.join("routes").join(
+                        route.file_path.file_name().unwrap_or_default().to_str().unwrap_or("route.bv")
+                    );
+                    fs::copy(&route.file_path, &out_path)?;
+                    
+                    route_manifest.push(serde_json::json!({
+                        "method": format!("{:?}", route.method),
+                        "path": route.path,
+                        "file": route.file_path.file_name().unwrap_or_default().to_str().unwrap_or(""),
+                        "handler": route_file.handler_name,
+                        "middleware": route_file.middleware,
+                    }));
+                    println!(" ✓");
+                } else {
+                    println!(" ❌");
+                    eprintln!("    Compilation failed: {}", build_result.stderr);
+                }
+            }
+            Err(e) => {
+                println!(" ❌");
+                eprintln!("    Build error: {}", e);
+            }
         }
     }
 
-    std::fs::create_dir_all(project_path.join("dist"))?;
+    if public_path.exists() {
+        println!("  Copying public/...");
+        copy_dir_all(&public_path, &dist_path.join("public"))?;
+    }
+
+    let manifest_path = dist_path.join("manifest.json");
+    let mut manifest_file = File::create(manifest_path)?;
+    manifest_file.write_all(serde_json::to_string_pretty(&route_manifest)?.as_bytes())?;
+
     println!("\n✓ Build complete. Output in dist/");
+    println!("  {} routes compiled", route_manifest.len());
+
+    Ok(())
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    use std::fs;
+
+    if !dst.exists() {
+        fs::create_dir_all(dst)?;
+    }
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if ty.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
 
     Ok(())
 }

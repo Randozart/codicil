@@ -50,6 +50,7 @@ pub struct RouteMatch<'a> {
 pub struct Router {
     routes: HashMap<(HttpMethod, String), Route>,
     pattern_routes: Vec<Route>,
+    error_route: Option<PathBuf>,
 }
 
 impl Router {
@@ -59,12 +60,14 @@ impl Router {
             return Ok(Router {
                 routes: HashMap::new(),
                 pattern_routes: Vec::new(),
+                error_route: None,
             });
         }
 
         let mut router = Router {
             routes: HashMap::new(),
             pattern_routes: Vec::new(),
+            error_route: None,
         };
 
         for entry in walkdir(&routes_dir)? {
@@ -78,10 +81,23 @@ impl Router {
                         router.routes.insert(path_key, route);
                     }
                 }
+            } else if entry_path.extension().and_then(|s| s.to_str()) == Some("bv")
+                && entry_path.file_stem().and_then(|s| s.to_str()) == Some("[error]")
+            {
+                router.error_route = Some(entry_path);
             }
         }
 
+        let error_path = routes_dir.join("[error].bv");
+        if error_path.exists() {
+            router.error_route = Some(error_path);
+        }
+
         Ok(router)
+    }
+
+    pub fn error_route(&self) -> Option<&PathBuf> {
+        self.error_route.as_ref()
     }
 
     pub fn find_route(&self, method: &HttpMethod, path: &str) -> Option<RouteMatch<'_>> {
@@ -123,8 +139,8 @@ fn walkdir(dir: &Path) -> Result<Vec<std::fs::DirEntry>, RouteDiscoveryError> {
     Ok(entries)
 }
 
-fn parse_route_file(path: &Path) -> Option<Route> {
-    let filename = path.file_stem()?.to_str()?;
+fn parse_route_file(file_path: &Path) -> Option<Route> {
+    let filename = file_path.file_stem()?.to_str()?;
 
     let method = filename.split('.').next()?;
     let method = HttpMethod::from_str(method)?;
@@ -156,8 +172,8 @@ fn parse_route_file(path: &Path) -> Option<Route> {
 
     Some(Route {
         method,
-        path: path.clone(),
-        file_path: PathBuf::from(&path),
+        path,
+        file_path: file_path.to_path_buf(),
         handler_name: "handle".to_string(),
     })
 }

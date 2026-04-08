@@ -1,0 +1,98 @@
+# Codicil FFI Bindings
+# Provides web framework bindings for Brief code
+
+[[functions]]
+name = "json_parse"
+location = "codicil::json_parse"
+target = "native"
+mapper = "rust"
+description = "Parse JSON string to JsonValue"
+
+[functions.input]
+s = "String"
+
+[functions.output.success]
+result = "Data"
+
+[functions.output.error]
+type = "JsonError"
+code = "Int"
+message = "String"
+
+
+[[functions]]
+name = "json_stringify"
+location = "codicil::json_stringify"
+target = "native"
+mapper = "rust"
+description = "Convert value to JSON string"
+
+[functions.input]
+data = "Data"
+
+[functions.output.success]
+result = "String"
+
+[functions.output.error]
+type = "JsonError"
+code = "Int"
+message = "String"
+
+
+[[functions]]
+name = "http_get"
+location = "codicil::http_get"
+target = "native"
+mapper = "rust"
+description = "Make HTTP GET request"
+
+[functions.input]
+url = "String"
+
+[functions.output.success]
+result = "Data"
+
+[functions.output.error]
+type = "HttpError"
+code = "Int"
+message = "String"
+
+
+[[functions]]
+name = "http_post"
+location = "codicil::http_post"
+target = "native"
+mapper = "rust"
+description = "Make HTTP POST request"
+
+[functions.input]
+url = "String"
+body = "String"
+
+[functions.output.success]
+result = "Data"
+
+[functions.output.error]
+type = "HttpError"
+code = "Int"
+message = "String"
+
+
+[[functions]]
+name = "db_query"
+location = "codicil::db_query"
+target = "native"
+mapper = "rust"
+description = "Execute database query"
+
+[functions.input]
+query = "String"
+params = "Data"
+
+[functions.output.success]
+result = "Data"
+
+[functions.output.error]
+type = "DbError"
+code = "Int"
+message = "String"
