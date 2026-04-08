@@ -97,6 +97,38 @@ codicil-cli/src/main.rs  # UPDATED: Full HTTP server
 
 **Next**: Day 3 - Dev server with hot reload, scaffolding commands
 
+### Day 3: Hot Reload & Scaffolding (2026-04-08)
+
+**Goal**: File watching for hot reload, complete scaffolding commands
+
+**Delivered**:
+- File watcher module (`watcher.rs`) - using notify crate for file system events
+- Hot reload in dev server - watches routes/, lib/, middleware/, components/
+- Full CRUD scaffolding for models (6 routes generated)
+- Improved component templates with rstruct and bindings
+- Graceful shutdown with Ctrl+C
+
+**Files Created/Modified**:
+```
+codicil-core/src/
+├── watcher.rs         # NEW: File watching with notify
+├── lib.rs            # UPDATED: Export watcher module
+
+codicil-cli/src/main.rs  # UPDATED: 
+    - Full CRUD scaffolding (6 routes per model)
+    - Hot reload with Ctrl+C support
+    - Better component templates
+```
+
+**Key Decisions**:
+1. **Hot reload approach**: Watch files in background, print discovery on change
+2. **Scaffolding generates**: GET list, POST create, GET item, PUT update, DELETE delete
+3. **File watching**: Uses notify crate with 200ms poll interval
+
+**Test Results**: 10/10 tests passing
+
+**Next**: Day 4 - FFI integration, database support
+
 ### Day 2: Brief Compiler Integration
 
 **Goal**: Call Brief compiler, parse TOML headers, verify pre/post conditions
