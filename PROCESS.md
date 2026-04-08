@@ -61,6 +61,42 @@ codicil/
 
 **Next**: Day 2 - Brief compiler integration
 
+### Day 2: Brief Compiler Integration (2026-04-08)
+
+**Goal**: Call Brief compiler, parse TOML headers, execute handlers, verify contracts
+
+**Delivered**:
+- Route file parser (`route_file.rs`) - parses TOML headers and Brief code
+- Brief compiler integration (`compiler.rs`) - calls `brief check` subprocess
+- Request context (`context.rs`) - HTTP request/response abstraction
+- Handler execution (`handler.rs`) - executes Brief handlers
+- Middleware chain (`middleware.rs`) - middleware composition
+- CLI integration - routes now dispatch to Brief handlers
+- Axum HTTP server with route discovery
+
+**Files Created/Modified**:
+```
+codicil-core/src/
+├── route_file.rs      # NEW: Parse TOML headers + Brief code
+├── compiler.rs         # NEW: Brief compiler subprocess
+├── context.rs         # NEW: Request/Response types
+├── handler.rs         # NEW: Execute Brief handlers
+├── middleware.rs      # NEW: Middleware chain
+├── lib.rs             # UPDATED: Export new modules
+└── router.rs          # UPDATED: Enhanced routing
+
+codicil-cli/src/main.rs  # UPDATED: Full HTTP server
+```
+
+**Key Decisions**:
+1. **TOML sections**: `[route]`, `[pre]`, `[post]` for metadata, Brief code for logic
+2. **Brief as subprocess**: `brief check` for validation, `brief build` for compilation
+3. **Context threading**: RequestContext passed through middleware chain to handler
+
+**Test Results**: 10/10 tests passing
+
+**Next**: Day 3 - Dev server with hot reload, scaffolding commands
+
 ### Day 2: Brief Compiler Integration
 
 **Goal**: Call Brief compiler, parse TOML headers, verify pre/post conditions

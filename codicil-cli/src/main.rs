@@ -1,7 +1,19 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
+use axum::{
+    body::Body,
+    extract::{Path as AxumPath, State},
+    http::{HeaderMap, Method, StatusCode},
+    response::Response,
+    routing::any,
+    Router,
+};
 use clap::{Parser, Subcommand};
+use tokio::net::TcpListener;
+use codicil_core::{BriefCompiler, Handler, MiddlewareChain, RequestContext, Router as CodicilRouter, RouteFile};
 
 #[derive(Parser)]
 #[command(name = "codi")]
@@ -82,15 +94,13 @@ host = "localhost"
 port = 3000
 
 [build]
-# Brief compiler path (leave empty to use system brief)
 brief_path = ""
 "#,
         name
     );
     fs::write(project_dir.join("codicil.toml"), codicil_toml)?;
 
-    let index_route = r#"# routes/GET.index.bv
-[route]
+    let index_route = r#"[route]
 method = "GET"
 path = "/"
 
@@ -106,10 +116,9 @@ txn handle [true][post] {{
 "#;
     fs::write(project_dir.join("routes/GET.index.bv"), index_route)?;
 
-    let gitkeep = "";
-    fs::write(project_dir.join("lib/.gitkeep"), gitkeep)?;
-    fs::write(project_dir.join("middleware/.gitkeep"), gitkeep)?;
-    fs::write(project_dir.join("components/.gitkeep"), gitkeep)?;
+    fs::write(project_dir.join("lib/.gitkeep"), "")?;
+    fs::write(project_dir.join("middleware/.gitkeep"), "")?;
+    fs::write(project_dir.join("components/.gitkeep"), "")?;
 
     let env_example = r#"# Environment variables
 DATABASE_URL=postgresql://localhost:5432/mydb
@@ -122,15 +131,13 @@ JWT_SECRET=your-secret-key
     Ok(())
 }
 
-async fn cmd_dev(path: &str) -> Result<()> {
-    use axum::{
-        routing::get,
-        Router,
-    };
-    use tokio::net::TcpListener;
-    use codicil_core::Router as CodicilRouter;
+#[derive(Clone)]
+struct AppState {
+    project_path: Arc<PathBuf>,
+}
 
-    let project_path = Path::new(path);
+async fn cmd_dev(path: &str) -> Result<()> {
+    let project_path = PathBuf::from(path).canonicalize()?;
     let config_path = project_path.join("codicil.toml");
 
     let mut host = "localhost".to_string();
@@ -138,34 +145,118 @@ async fn cmd_dev(path: &str) -> Result<()> {
 
     if config_path.exists() {
         let config_str = std::fs::read_to_string(&config_path)?;
-        let config: toml::Value = toml::from_str(&config_str)?;
-        if let Some(server) = config.get("server") {
-            if let Some(h) = server.get("host").and_then(|v| v.as_str()) {
-                host = h.to_string();
-            }
-            if let Some(p) = server.get("port").and_then(|v| v.as_integer()) {
-                port = p as u16;
+        if let Ok(config) = config_str.parse::<toml::Value>() {
+            if let Some(server) = config.get("server") {
+                if let Some(h) = server.get("host").and_then(|v| v.as_str()) {
+                    host = h.to_string();
+                }
+                if let Some(p) = server.get("port").and_then(|v| v.as_integer()) {
+                    port = p as u16;
+                }
             }
         }
     }
 
-    let router = CodicilRouter::discover_routes(project_path)?;
-    let routes: Vec<_> = router.routes().collect();
+    let codicil_router = CodicilRouter::discover_routes(&project_path)?;
+    let routes: Vec<_> = codicil_router.routes().collect();
 
     println!("🔍 Discovered {} routes:", routes.len());
     for route in &routes {
         println!("  {} {}", format!("{:?}", route.method), route.path);
     }
 
-    let app = Router::new().route("/", get(|| async { "Codicil dev server" }));
+    let brief_compiler = BriefCompiler::new().ok();
+    let _ = brief_compiler;
+
+    let state = AppState {
+        project_path: Arc::new(project_path),
+    };
+
+    let app = Router::new()
+        .route("/", any(handle_request))
+        .route("/*path", any(handle_request))
+        .with_state(state);
 
     let addr = format!("{}:{}", host, port);
     println!("\n🚀 Dev server running at http://{}", addr);
+    println!("Press Ctrl+C to stop");
 
     let listener = TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn handle_request(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    AxumPath(path): AxumPath<String>,
+) -> Response {
+    let path = format!("/{}", path);
+    
+    let codicil_router = match CodicilRouter::discover_routes(&state.project_path) {
+        Ok(r) => r,
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("Failed to discover routes"))
+                .unwrap();
+        }
+    };
+
+    let http_method = codicil_core::HttpMethod::from_str(method.as_str()).unwrap_or(codicil_core::HttpMethod::GET);
+    let route_match = match codicil_router.find_route(&http_method, &path) {
+        Some(m) => m,
+        None => {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("404 Not Found"))
+                .unwrap();
+        }
+    };
+
+    let route_file = match RouteFile::parse(&route_match.route.file_path) {
+        Ok(rf) => rf,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("Failed to parse route: {}", e)))
+                .unwrap();
+        }
+    };
+
+    let mut ctx = RequestContext::new(method.to_string(), path);
+    ctx = ctx.with_params(route_match.params);
+
+    for (key, value) in headers.iter() {
+        if let Ok(v) = value.to_str() {
+            ctx.headers.insert(key.to_string(), v.to_string());
+        }
+    }
+
+    if !route_file.middleware.is_empty() {
+        if let Ok(chain) = MiddlewareChain::from_names(&route_file.middleware, &state.project_path) {
+            let _ = chain.execute(ctx.clone()).await;
+        }
+    }
+
+    let handler = Handler::new(route_file, route_match.route.file_path.clone());
+    match handler.execute(ctx).await {
+        Ok(response) => {
+            let mut builder = Response::builder().status(response.status);
+            for (key, value) in response.headers {
+                builder = builder.header(&key, &value);
+            }
+            builder.body(Body::from(response.body)).unwrap()
+        }
+        Err(e) => {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("Handler error: {}", e)))
+                .unwrap()
+        }
+    }
 }
 
 fn cmd_build(path: &str) -> Result<()> {
@@ -219,15 +310,20 @@ txn delete [id > 0][result == true] {{
             );
             fs::write(&model_path, model_content)?;
 
-            let singular = name.to_lowercase();
-            let plural = format!("{}s", singular);
+            let plural = format!("{}s", name.to_lowercase());
             fs::write(
                 Path::new("routes").join(format!("GET.{}.bv", plural)),
-                format!(r#"# routes/GET.{}.bv
+                format!(
+                    r#"[route]
+method = "GET"
+path = "/{}"
+
 txn handle [true][response.status == 200] {{
     term &response {{ status: 200, body: "[]" }};
 }};
-"#, plural),
+"#,
+                    plural
+                ),
             )?;
 
             println!("✓ Created model '{}'", name);
@@ -236,14 +332,12 @@ txn handle [true][response.status == 200] {{
         }
         Generate::Middleware { name } => {
             let middleware_path = Path::new("middleware").join(format!("{}.bv", name.to_lowercase()));
-            let content = format!(
-                r#"# middleware/{}.bv
-txn handle [true][post] {{
+            let content = r#"[route]
+
+txn handle [true][post] {
     term;
-}};
-"#,
-                name.to_lowercase()
-            );
+};
+"#;
             std::fs::write(&middleware_path, content)?;
             println!("✓ Created middleware '{}'", name);
         }
