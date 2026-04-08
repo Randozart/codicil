@@ -1,0 +1,4 @@
+# routes/GET.users.bv
+txn handle [true][response.status == 200] {
+    term &response { status: 200, body: "[]" };
+};

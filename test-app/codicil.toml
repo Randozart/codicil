@@ -1,0 +1,12 @@
+# Codicil Project Configuration
+[project]
+name = "test-app"
+version = "0.1.0"
+
+[server]
+host = "localhost"
+port = 3000
+
+[build]
+# Brief compiler path (leave empty to use system brief)
+brief_path = ""

@@ -1,0 +1,9 @@
+<script type="brief">
+rstruct Button {
+    <div class="button">Content</div>
+}
+</script>
+
+<view>
+    <Button />
+</view>

@@ -1,0 +1,19 @@
+[workspace]
+members = ["codicil-core", "codicil-cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Codicil Team"]
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+notify = "6"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "1"

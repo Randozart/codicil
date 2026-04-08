@@ -1,0 +1,14 @@
+# routes/GET.index.bv
+[route]
+method = "GET"
+path = "/"
+
+[post]
+response.status == 200
+
+txn handle [true][post] {{
+  term &response {{
+    status: 200,
+    body: "Hello from Codicil!"
+  }};
+}};

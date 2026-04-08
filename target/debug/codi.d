@@ -1,0 +1,1 @@
+/home/randozart/Desktop/Projects/codicil/target/debug/codi: /home/randozart/Desktop/Projects/codicil/codicil-cli/src/main.rs /home/randozart/Desktop/Projects/codicil/codicil-core/src/lib.rs /home/randozart/Desktop/Projects/codicil/codicil-core/src/router.rs

@@ -1,0 +1,20 @@
+# lib/user.bv
+struct User {
+    id: Int;
+}
+
+txn create [true][result.id > 0] {
+    term;
+};
+
+txn find [id > 0][result exists] {
+    term;
+};
+
+txn update [id > 0][result.id == id] {
+    term;
+};
+
+txn delete [id > 0][result == true] {
+    term;
+};
