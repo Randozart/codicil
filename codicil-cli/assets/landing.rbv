@@ -1,0 +1,78 @@
+<script>
+import "./landing.css";
+
+let page_title: String = "Codicil";
+let subtitle: String = "A contract-driven web framework";
+
+let clicks: Int = 0;
+let items: List<Item> = [{name:"Contracts"}, {name:"Reactivity"}, {name:"Type Safety"}];
+
+struct Item {
+    let name: String = "";
+    let color: String = "#fff";
+};
+
+txn increment [clicks >= 0][clicks == @clicks + 1] {
+    &clicks = clicks + 1;
+    term;
+};
+
+txn reset_clicks [clicks > 0][clicks == 0] {
+    &clicks = 0;
+    term;
+};
+
+rstruct Counter {
+    let count: Int = 5;
+    
+    txn tick [count > 0][count == @count - 1] {
+        &count = count - 1;
+        term;
+    };
+
+    rct txn reset [count == 0][count == 5] {
+        &count = 5;
+        term;
+    };
+    
+    <div class="mini-counter">
+        <span>Demo: </span>
+        <span b-text="count">0</span>
+        <button b-trigger:click="tick">-</button>
+    </div>
+};
+
+</script>
+
+<view>
+    <div class="landing">
+        <header>
+            <h1 b-text="page_title">Codicil</h1>
+            <p b-text="subtitle">A contract-driven web framework</p>
+        </header>
+        
+        <section class="demo">
+            <h2>Brief in Action</h2>
+            <div class="counter-display">
+                <span>Clicks: </span>
+                <span b-text="clicks">0</span>
+            </div>
+            <div class="buttons">
+                <button b-trigger:click="increment">+</button>
+                <button b-trigger:click="reset_clicks">Reset</button>
+            </div>
+        </section>
+        
+        <section class="list-demo">
+            <h2>Features</h2>
+            <ul b-each:item="items">
+                <li b-text="item.name">Item</li>
+            </ul>
+        </section>
+        
+        <section class="component-demo">
+            <h2><code>rstruct</code> Component</h2>
+            <Counter />
+        </section>
+    </div>
+</view>

@@ -1,0 +1,12 @@
+// Server-side route component
+
+[route]
+method = "GET"
+path = "/"
+
+[post]
+response.status == 200
+
+txn handle [true][post] {
+    term "landing";
+};
