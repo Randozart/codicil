@@ -1,0 +1,7 @@
+[route]
+method = "GET"
+path = "/hints"
+
+defn handle() -> String [true][result != ""] {
+    term "{\"hint\":\"Stay curious.\"}";
+};

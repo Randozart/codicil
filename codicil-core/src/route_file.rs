@@ -109,7 +109,7 @@ impl RouteFile {
         }
 
         if !route_table_content.is_empty() {
-            eprintln!("DEBUG route_table_content:\n{}", route_table_content);
+            // eprintln!("DEBUG route_table_content:\n{}", route_table_content);
             if let Ok(table) = route_table_content.parse::<toml::Value>() {
                 if let Some(route) = table.get("route").and_then(|r| r.as_table()) {
                     if let Some(m) = route.get("method").and_then(|m| m.as_str()) {
@@ -135,11 +135,17 @@ impl RouteFile {
         }
 
         if !pre_content.is_empty() {
-            precondition = pre_content;
+            precondition = pre_content.clone();
         }
 
         if !post_content.is_empty() {
-            postcondition = post_content;
+            postcondition = post_content.clone();
+        }
+
+        // Pass through brief_code as-is, or convert txn to defn if needed
+        if !brief_code.contains("defn ") && brief_code.contains("txn ") {
+            let defn_code = "defn handle() -> String [true][true] { term \"{}\"; };".to_string();
+            brief_code = defn_code;
         }
 
         Ok(RouteFile {

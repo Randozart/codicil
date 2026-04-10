@@ -1,3 +1,7 @@
 /target/
 /test-project/
 *.lock
+
+# Landing page build artifacts
+landing-page/landing-build/
+landing-page/public/build/

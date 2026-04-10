@@ -1,0 +1,105 @@
+<script>
+// FFI declarations first
+frgn sig __http_get(url: String) -> String;
+frgn sig __json_decode(json_str: String) -> Data;
+frgn sig __json_get_string(data: Data, key: String) -> String;
+
+import "../styles/globals.css";
+import "../assets/logo.svg" as Logo;
+
+let page_title: String = "Codicil";
+let subtitle: String = "A contract-driven web framework";
+
+let clicks: Int = 0;
+let items: List<Item> = [{name:"Contracts"}, {name:"Reactivity"}, {name:"Type Safety"}];
+let hint_result: String = "";
+
+struct Item {
+    let name: String = "";
+    let color: String = "#fff";
+};
+
+txn increment [clicks >= 0][clicks == @clicks + 1] {
+    &clicks = clicks + 1;
+    term;
+};
+
+txn reset_clicks [clicks > 0][clicks == 0] {
+    &clicks = 0;
+    term;
+};
+
+txn get_hint [hint_result == ""][hint_result != ""] {
+    let raw = __http_get("/hints");
+    let parsed = __json_decode(raw);
+    [parsed != null] {
+        &hint_result = __json_get_string(parsed, "hint");
+    };
+    [parsed == null] {
+        &hint_result = "Error: could not fetch hint";
+    };
+    term;
+};
+
+rstruct Counter {
+    let count: Int = 5;
+    
+    txn tick [count > 0][count == @count - 1] {
+        &count = count - 1;
+        term;
+    };
+
+    rct txn reset [count == 0][count == 5] {
+        &count = 5;
+        term;
+    };
+    
+    <div class="mini-counter">
+        <span>Demo: </span>
+        <span b-text="count">0</span>
+        <button b-trigger:click="tick">-</button>
+    </div>
+};
+
+</script>
+
+<view>
+    <div class="landing">
+        <header>
+            <Logo />
+            <h1 b-text="page_title">Codicil</h1>
+            <p b-text="subtitle">A contract-driven web framework</p>
+        </header>
+        
+        <section class="demo">
+            <h2>Brief in Action</h2>
+            <div class="counter-display">
+                <span>Clicks: </span>
+                <span b-text="clicks">0</span>
+            </div>
+            <div class="buttons">
+                <button b-trigger:click="increment">+</button>
+                <button b-trigger:click="reset_clicks">Reset</button>
+            </div>
+        </section>
+        
+        <section class="list-demo">
+            <h2>Features</h2>
+            <ul b-each:item="items">
+                <li b-text="item.name">Item</li>
+            </ul>
+        </section>
+        
+        <section class="component-demo">
+            <h2><code>rstruct</code> Component</h2>
+            <Counter />
+        </section>
+
+        <section class="hint-demo">
+            <h2>Server Integration</h2>
+            <p>Click the button to fetch a hint from the server.</p>
+            <button class="hint-btn" b-trigger:click="get_hint">Get Hint</button>
+            <p b-text="hint_result"></p>
+        </section>
+    </div>
+</view>
