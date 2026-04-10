@@ -160,6 +160,47 @@ async fn handle_favicon() -> impl IntoResponse {
         .unwrap()
 }
 
+fn serve_static_file(path: &Path) -> Response {
+    // Determine content type and binary mode from extension
+    let (content_type, is_binary) = match path.extension().and_then(|s| s.to_str()) {
+        Some("js") => ("application/javascript", false),
+        Some("css") => ("text/css", false),
+        Some("wasm") => ("application/wasm", true),
+        Some("html") => ("text/html", false),
+        Some("svg") => ("image/svg+xml", false),
+        Some("json") => ("application/json", false),
+        Some("png") => ("image/png", true),
+        Some("jpg") | Some("jpeg") => ("image/jpeg", true),
+        _ => ("application/octet-stream", false),
+    };
+    
+    if is_binary {
+        match std::fs::read(path) {
+            Ok(bytes) => Response::builder()
+                .status(200)
+                .header("Content-Type", content_type)
+                .body(Body::from(bytes))
+                .unwrap(),
+            Err(_) => Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("File not found"))
+                .unwrap(),
+        }
+    } else {
+        match std::fs::read_to_string(path) {
+            Ok(content) => Response::builder()
+                .status(200)
+                .header("Content-Type", content_type)
+                .body(Body::from(content))
+                .unwrap(),
+            Err(_) => Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("File not found"))
+                .unwrap(),
+        }
+    }
+}
+
 fn recompile_rbv_components(project_path: &Path) {
     let components_dir = project_path.join("components");
     let build_dir = project_path.join("public/build");
@@ -356,6 +397,13 @@ async fn handle_catchall(
     body: Bytes,
 ) -> Response {
     let path = format!("/{}", path);
+    
+    // Check for static file in public/build/ first
+    let build_path = state.project_path.join("public/build").join(&path[1..]);
+    if build_path.is_file() {
+        return serve_static_file(&build_path);
+    }
+    
     handle_request_internal(state, method, headers, &path, query_params, body).await
 }
 

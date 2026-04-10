@@ -1,8 +1,8 @@
 <script>
 // FFI declarations first
-frgn sig __http_get(url: String) -> String;
-frgn sig __json_decode(json_str: String) -> Data;
-frgn sig __json_get_string(data: Data, key: String) -> String;
+frgn __http_get(url: String) -> Result<String, HttpError> from "std/bindings/http.toml";
+frgn __parse(s: String) -> Result<Data, JsonError> from "std/bindings/json.toml";
+frgn __get_string(data: Data, key: String) -> Result<String, JsonError> from "std/bindings/json.toml";
 
 import "../styles/globals.css";
 import "../assets/logo.svg" as Logo;
@@ -30,14 +30,10 @@ txn reset_clicks [clicks > 0][clicks == 0] {
 };
 
 txn get_hint [hint_result == ""][hint_result != ""] {
-    let raw = __http_get("/hints");
-    let parsed = __json_decode(raw);
-    [parsed != null] {
-        &hint_result = __json_get_string(parsed, "hint");
-    };
-    [parsed == null] {
-        &hint_result = "Error: could not fetch hint";
-    };
+    let response = __http_get("/hints");
+    let parsed = __parse(response);
+    let hint = __get_string(parsed, "hint");
+    &hint_result = hint;
     term;
 };
 
