@@ -1,0 +1,71 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        working-directory: ./codicil-core
+        run: cargo build --verbose
+
+      - name: Build CLI
+        working-directory: ./codicil-cli
+        run: cargo build --verbose
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        working-directory: ./codicil-core
+        run: cargo test --verbose
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run clippy
+        working-directory: ./codicil-core
+        run: cargo clippy -- -D warnings
+
+      - name: Run clippy on CLI
+        working-directory: ./codicil-cli
+        run: cargo clippy -- -D warnings
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check formatting
+        working-directory: ./codicil-core
+        run: cargo fmt -- --check
+
+      - name: Check formatting on CLI
+        working-directory: ./codicil-cli
+        run: cargo fmt -- --check

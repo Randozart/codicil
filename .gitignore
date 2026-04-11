@@ -1,7 +1,27 @@
+# Build artifacts
 /target/
-/test-project/
-*.lock
+
+# Lock files
+/cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
 
 # Landing page build artifacts
-landing-page/landing-build/
-landing-page/public/build/
+/landing-page/landing-build/
+/landing-page/dist/
+/landing-page/public/
+/landing-page/CORRECTIONS.md
+/landing-page/test.bv
+/landing-page/test_txn.bv
+
+# Test projects (can be regenerated)
+/test-project/
+/test-app/

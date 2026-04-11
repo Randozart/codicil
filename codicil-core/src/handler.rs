@@ -34,6 +34,8 @@ impl Handler {
             self.route_file.path.replace("/", "_").replace(":", "_")
         ));
 
+        // println!("DEBUG: Writing brief code to {}:\n{}", temp_file.display(), brief_code);
+        
         std::fs::write(&temp_file, brief_code)
             .map_err(|e| HandlerError::Io(e.to_string()))?;
 

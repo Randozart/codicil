@@ -2,7 +2,9 @@
 
 **A contract-driven web framework built on Brief**
 
-Codicil is a full-stack web framework that brings the power of contract-driven programming to web development. Built on the [Brief](https://github.com/anomalyco/brief-lang) programming language, Codicil enables developers to write web applications with verifiable preconditions, postconditions, and state transitions.
+> **Status**: Experimental WIP — under Apache 2.0 license
+
+Codicil is a full-stack web framework that brings the power of contract-driven programming to web development. Built on the [Brief](https://github.com/Randozart/brief-lang) programming language, Codicil enables developers to write web applications with verifiable preconditions, postconditions, and state transitions.
 
 ## Features
 
@@ -23,14 +25,10 @@ Codicil is a full-stack web framework that brings the power of contract-driven p
 
 ```bash
 # Install Brief compiler
-git clone https://github.com/anomalyco/brief-lang.git
-cd brief-lang && cargo build --release
-cp target/release/brief-compiler ~/.local/bin/brief
+cargo install brief
 
 # Install Codicil CLI
-git clone https://github.com/anomalyco/codicil.git
-cd codicil && cargo build --release
-cp target/release/codi ~/.local/bin/codi
+cargo install codicil
 ```
 
 ## Quick Start
@@ -45,6 +43,10 @@ codi dev
 ```
 
 Visit `http://localhost:3000` to see your application.
+
+## Example Project
+
+See the `landing-page/` directory for a complete working example — this is also the template used by `codi init`. Each file contains comments explaining how it works.
 
 ## Project Structure
 
@@ -154,13 +156,25 @@ txn handle [true][response.status > 0] {
 ## CLI Commands
 
 ```bash
-codi init <name>           # Create new project
-codi dev [path]           # Start dev server with hot reload
-codi build [path]          # Production build
-codi generate model <name>   # Scaffold model (6 routes)
-codi generate middleware <name>  # Create middleware
-codi generate component <name>   # Create RBV component
+codi init <name>                    # Create new project (with full landing-page template)
+codi init <name> --no-template    # Create empty project scaffold
+codi dev [path]                  # Start dev server with hot reload
+codi build [path]                # Production build
+codi generate model <name>        # Scaffold model (6 routes)
+codi generate middleware <name>   # Create middleware
+codi generate component <name>    # Create RBV component
 ```
+
+### `codi init`
+
+Creates a new Codicil project. By default, includes a full working example with:
+- Landing page component (`components/landing.rbv`)
+- Index route (`routes/index.bv`)
+- Hints API route (`routes/GET.hints.bv`)
+- Global styles (`styles/globals.css`)
+- Compiled assets in `public/build/`
+
+Use `--no-template` to create just the folder structure with empty files.
 
 ## Architecture
 
@@ -174,4 +188,4 @@ Codicil → HTTP routing → Middleware → FFI → Response
 
 ## License
 
-MIT
+Apache 2.0 — see [LICENSE](LICENSE)

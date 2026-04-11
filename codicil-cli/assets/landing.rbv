@@ -1,40 +1,76 @@
 <script>
-import "./landing.css";
+// FFI (Foreign Function Interface) declarations
+// These define the contract for calling external code (Rust for native, JavaScript for Web).
+// "std/bindings/*" paths are automatically resolved by the Metropolitan FFI system.
+frgn __http_get(url: String) -> Result<String, HttpError> from "std/bindings/http.toml";
+frgn __parse(s: String) -> Result<Data, JsonError> from "std/bindings/json.toml";
+frgn __get_string(data: Data, key: String) -> Result<String, JsonError> from "std/bindings/json.toml";
 
+// Style and Asset imports
+// Relative paths are supported. Assets like SVG can be imported as Components.
+import "../styles/globals.css";
+import "../assets/favicon.svg" as Logo;
+
+// Signals: Reactive state variables
+// When a signal changes, any part of the view that depends on it updates automatically.
 let page_title: String = "Codicil";
 let subtitle: String = "A contract-driven web framework";
 
 let clicks: Int = 0;
 let items: List<Item> = [{name:"Contracts"}, {name:"Reactivity"}, {name:"Type Safety"}];
+let hint_result: String = "";
 
+// Struct: Define custom data types with initial values
 struct Item {
     let name: String = "";
     let color: String = "#fff";
 };
 
+// Transaction (txn): Atomic units of state change
+// format: txn name [pre-conditions][post-conditions] { body }
+// @variable refers to the value BEFORE the transaction started.
 txn increment [clicks >= 0][clicks == @clicks + 1] {
     &clicks = clicks + 1;
     term;
 };
 
+// If pre-conditions aren't met, or post-conditions fail, the txn rolls back.
 txn reset_clicks [clicks > 0][clicks == 0] {
     &clicks = 0;
     term;
 };
 
+// Async-ready FFI transaction
+txn get_hint [hint_result == ""][hint_result != ""] {
+    let response = __http_get("/hints"); // Calls the routes/GET.hints.bv endpoint
+    let parsed = __parse(response);      // Logic extracted from std/bindings/json.toml
+    let hint = __get_string(parsed, "hint"); 
+    &hint_result = hint;
+    term;
+};
+
+// rstruct: A reusable reactive component
+// It encapsulates its own signals, transactions, and HTML template.
 rstruct Counter {
+    // Component-local signal
     let count: Int = 5;
     
+    // Component-local transaction
     txn tick [count > 0][count == @count - 1] {
         &count = count - 1;
         term;
     };
 
+    // Reactive Transaction (rct txn): Triggered automatically by state changes
+    // This one resets the counter to 5 whenever it hits 0.
     rct txn reset [count == 0][count == 5] {
         &count = 5;
         term;
     };
     
+    // Inline template for the component
+    // b-text binds an element's text content to a signal.
+    // b-trigger binds an event to a transaction.
     <div class="mini-counter">
         <span>Demo: </span>
         <span b-text="count">0</span>
@@ -47,6 +83,7 @@ rstruct Counter {
 <view>
     <div class="landing">
         <header>
+            <Logo /> <!-- Imported SVG used as a Component -->
             <h1 b-text="page_title">Codicil</h1>
             <p b-text="subtitle">A contract-driven web framework</p>
         </header>
@@ -65,6 +102,7 @@ rstruct Counter {
         
         <section class="list-demo">
             <h2>Features</h2>
+            <!-- b-each: Renders a list reactive to the 'items' signal -->
             <ul b-each:item="items">
                 <li b-text="item.name">Item</li>
             </ul>
@@ -72,7 +110,14 @@ rstruct Counter {
         
         <section class="component-demo">
             <h2><code>rstruct</code> Component</h2>
-            <Counter />
+            <Counter /> <!-- Instance of our custom reactive component -->
+        </section>
+
+        <section class="hint-demo">
+            <h2>Server Integration</h2>
+            <p>Click the button to fetch a hint from the server.</p>
+            <button class="hint-btn" b-trigger:click="get_hint">Get Hint</button>
+            <p b-text="hint_result"></p>
         </section>
     </div>
 </view>

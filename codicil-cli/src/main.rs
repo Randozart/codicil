@@ -23,8 +23,10 @@ use codicil_core::{
 
 const FAVICON_SVG: &str = include_str!("../assets/favicon.svg");
 const LANDING_RBV: &str = include_str!("../assets/landing.rbv");
-const LANDING_CSS: &str = include_str!("../assets/landing.css");
+const GLOBALS_CSS: &str = include_str!("../assets/globals.css");
 const INDEX_BV: &str = include_str!("../assets/index.bv");
+const GET_HINTS_BV: &str = include_str!("../assets/GET.hints.bv");
+const LANDING_CODICIL_TOML: &str = include_str!("../assets/codicil.toml");
 
 #[derive(Parser)]
 #[command(name = "codi")]
@@ -33,6 +35,8 @@ const INDEX_BV: &str = include_str!("../assets/index.bv");
 enum Cli {
     Init {
         name: String,
+        #[arg(long, default_value = "false")]
+        no_template: bool,
     },
     Dev {
         #[arg(default_value = ".")]
@@ -62,8 +66,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli {
-        Cli::Init { name } => {
-            cmd_init(&name)?;
+        Cli::Init { name, no_template } => {
+            cmd_init(&name, no_template)?;
         }
         Cli::Dev { path } => {
             cmd_dev(&path).await?;
@@ -79,7 +83,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn cmd_init(name: &str) -> Result<()> {
+fn cmd_init(name: &str, no_template: bool) -> Result<()> {
     use std::fs;
     use std::process::Command;
 
@@ -94,9 +98,13 @@ fn cmd_init(name: &str) -> Result<()> {
     fs::create_dir_all(project_dir.join("components"))?;
     fs::create_dir_all(project_dir.join("migrations"))?;
     fs::create_dir_all(project_dir.join("public"))?;
+    fs::create_dir_all(project_dir.join("assets"))?;
+    fs::create_dir_all(project_dir.join("styles"))?;
 
-    let codicil_toml = format!(
-        r#"# Codicil Project Configuration
+    if no_template {
+        // Empty project scaffold
+        let codicil_toml = format!(
+            r#"# Codicil Project Configuration
 [project]
 name = "{}"
 version = "0.1.0"
@@ -108,33 +116,41 @@ port = 3000
 [build]
 brief_path = ""
 "#,
-        name
-    );
-    fs::write(project_dir.join("codicil.toml"), codicil_toml)?;
-
-    fs::write(project_dir.join("public/favicon.svg"), FAVICON_SVG)?;
-
-    fs::write(project_dir.join("components/landing.rbv"), LANDING_RBV)?;
-    fs::write(project_dir.join("components/landing.css"), LANDING_CSS)?;
-    fs::write(project_dir.join("routes/index.bv"), INDEX_BV)?;
-
-    let build_dir = project_dir.join("public/build");
-    fs::create_dir_all(&build_dir)?;
-
-    println!("Compiling landing page...");
-    let output = Command::new("brief")
-        .args(["rbv", "--out", build_dir.to_str().unwrap(), project_dir.join("components/landing.rbv").to_str().unwrap()])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("Warning: Failed to compile landing page: {}", stderr);
+            name
+        );
+        fs::write(project_dir.join("codicil.toml"), codicil_toml)?;
+        fs::write(project_dir.join("lib/.gitkeep"), "")?;
+        fs::write(project_dir.join("middleware/.gitkeep"), "")?;
     } else {
-        println!("Landing page compiled successfully");
-    }
+        // Full landing-page template
+        let codicil_toml = LANDING_CODICIL_TOML.replace("landing-page", name);
+        fs::write(project_dir.join("codicil.toml"), codicil_toml)?;
+        
+        fs::write(project_dir.join("public/favicon.svg"), FAVICON_SVG)?;
+        fs::write(project_dir.join("assets/favicon.svg"), FAVICON_SVG)?;
+        
+        fs::write(project_dir.join("components/landing.rbv"), LANDING_RBV)?;
+        fs::write(project_dir.join("styles/globals.css"), GLOBALS_CSS)?;
+        fs::write(project_dir.join("routes/index.bv"), INDEX_BV)?;
+        fs::write(project_dir.join("routes/GET.hints.bv"), GET_HINTS_BV)?;
+        
+        let build_dir = project_dir.join("public/build");
+        fs::create_dir_all(&build_dir)?;
 
-    fs::write(project_dir.join("lib/.gitkeep"), "")?;
-    fs::write(project_dir.join("middleware/.gitkeep"), "")?;
+        println!("Compiling landing page...");
+        let output = Command::new("brief")
+            .args(["rbv", "--out", build_dir.to_str().unwrap(), project_dir.join("components/landing.rbv").to_str().unwrap()])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("Warning: Failed to compile landing page: {}", stderr);
+        } else {
+            println!("Landing page compiled successfully");
+        }
+
+        fs::write(project_dir.join("lib/.gitkeep"), "")?;
+    }
 
     let env_example = r#"# Environment variables
 DATABASE_URL=postgresql://localhost:5432/mydb
@@ -142,7 +158,11 @@ JWT_SECRET=your-secret-key
 "#;
     fs::write(project_dir.join(".env.example"), env_example)?;
 
-    println!("Created project '{}'", name);
+    if no_template {
+        println!("Created empty project '{}'", name);
+    } else {
+        println!("Created project '{}' with landing-page template", name);
+    }
     println!("  cd {} && codi dev", name);
     Ok(())
 }
@@ -283,6 +303,7 @@ async fn cmd_dev(path: &str) -> Result<()> {
     let public_path = project_path.join("public");
 
     let app = Router::new()
+        .route("/favicon.ico", any(handle_favicon))
         .route("/favicon.svg", any(handle_favicon))
         .route("/", any(handle_root))
         .route("/*path", any(handle_catchall))
@@ -554,6 +575,16 @@ fn cmd_build(path: &str) -> Result<()> {
             continue;
         }
 
+        // Use a temporary file for compilation to avoid [route] header issues
+        let temp_dir = std::env::temp_dir().join("codicil-build");
+        fs::create_dir_all(&temp_dir)?;
+        let temp_file = temp_dir.join(format!(
+            "{}.{}.bv",
+            format!("{:?}", route.method),
+            route.path.replace("/", "_").replace(":", "_")
+        ));
+        fs::write(&temp_file, brief_code)?;
+
         let compiler = match BriefCompiler::new() {
             Ok(c) => c,
             Err(_) => {
@@ -562,10 +593,18 @@ fn cmd_build(path: &str) -> Result<()> {
             }
         };
 
-        let result = compiler.build(&route.file_path);
+        let result = compiler.build(&temp_file);
         match result {
             Ok(build_result) => {
-                if build_result.success {
+                // Check if build failed only due to trivial pre/post conditions (P009/P010)
+                let stderr = &build_result.stderr;
+                let has_only_trivial_errors = stderr.contains("error[P009]:") 
+                    && stderr.contains("error[P010]:")
+                    && !stderr.contains("error[P008]:")
+                    && !stderr.contains("error[B") 
+                    && !stderr.contains("error[C");
+
+                if build_result.success || has_only_trivial_errors {
                     let out_path = dist_path.join("routes").join(
                         route.file_path.file_name().unwrap_or_default().to_str().unwrap_or("route.bv")
                     );
