@@ -1,5 +1,7 @@
 # Codicil
 
+<img src="logo/codicil-logo.svg" alt="Codicil" width="128" height="128">
+
 **A contract-driven web framework built on Brief**
 
 > **Status**: Experimental WIP — under Apache 2.0 license
