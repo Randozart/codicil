@@ -73,7 +73,11 @@ pub async fn http_get_async(url: &str) -> Result<HttpResponse, String> {
         .await
         .map_err(|e| format!("Failed to read response body: {}", e))?;
 
-    Ok(HttpResponse { status, headers, body })
+    Ok(HttpResponse {
+        status,
+        headers,
+        body,
+    })
 }
 
 pub fn http_get(url: &str) -> Result<HttpResponse, String> {
@@ -108,7 +112,11 @@ pub async fn http_post_async(url: &str, body: &str) -> Result<HttpResponse, Stri
         .await
         .map_err(|e| format!("Failed to read response body: {}", e))?;
 
-    Ok(HttpResponse { status, headers, body: resp_body })
+    Ok(HttpResponse {
+        status,
+        headers,
+        body: resp_body,
+    })
 }
 
 pub fn http_post(url: &str, body: &str) -> Result<HttpResponse, String> {
@@ -116,7 +124,10 @@ pub fn http_post(url: &str, body: &str) -> Result<HttpResponse, String> {
     rt.block_on(http_post_async(url, body))
 }
 
-pub async fn db_query(query: &str, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn db_query(
+    query: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let database_url = env::var("DATABASE_URL")
         .map_err(|_| "DATABASE_URL environment variable not set".to_string())?;
 
@@ -131,21 +142,39 @@ pub async fn db_query(query: &str, params: &serde_json::Value) -> Result<serde_j
         .ok_or("db_query params must be an array")?;
 
     let rows: Vec<PgRow> = match params_array.len() {
-        0 => sqlx::query(query).fetch_all(&pool).await.map_err(|e| e.to_string())?,
+        0 => sqlx::query(query)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| e.to_string())?,
         1 => {
             let p0 = params_array[0].clone();
-            sqlx::query(query).bind(p0).fetch_all(&pool).await.map_err(|e| e.to_string())?
+            sqlx::query(query)
+                .bind(p0)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| e.to_string())?
         }
         2 => {
             let p0 = params_array[0].clone();
             let p1 = params_array[1].clone();
-            sqlx::query(query).bind(p0).bind(p1).fetch_all(&pool).await.map_err(|e| e.to_string())?
+            sqlx::query(query)
+                .bind(p0)
+                .bind(p1)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| e.to_string())?
         }
         3 => {
             let p0 = params_array[0].clone();
             let p1 = params_array[1].clone();
             let p2 = params_array[2].clone();
-            sqlx::query(query).bind(p0).bind(p1).bind(p2).fetch_all(&pool).await.map_err(|e| e.to_string())?
+            sqlx::query(query)
+                .bind(p0)
+                .bind(p1)
+                .bind(p2)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| e.to_string())?
         }
         _ => {
             let mut q = sqlx::query(query);
@@ -184,7 +213,10 @@ pub async fn db_query(query: &str, params: &serde_json::Value) -> Result<serde_j
     Ok(serde_json::Value::Array(json_rows))
 }
 
-pub fn db_query_blocking(query: &str, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+pub fn db_query_blocking(
+    query: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(db_query(query, params))
 }

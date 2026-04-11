@@ -28,8 +28,20 @@ pub enum HttpMethod {
     PATCH,
 }
 
+impl std::fmt::Display for HttpMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HttpMethod::GET => write!(f, "GET"),
+            HttpMethod::POST => write!(f, "POST"),
+            HttpMethod::PUT => write!(f, "PUT"),
+            HttpMethod::DELETE => write!(f, "DELETE"),
+            HttpMethod::PATCH => write!(f, "PATCH"),
+        }
+    }
+}
+
 impl HttpMethod {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_method(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
             "GET" => Some(HttpMethod::GET),
             "POST" => Some(HttpMethod::POST),
@@ -143,7 +155,7 @@ fn parse_route_file(file_path: &Path) -> Option<Route> {
     let filename = file_path.file_stem()?.to_str()?;
 
     let method = filename.split('.').next()?;
-    let method = HttpMethod::from_str(method)?;
+    let method = HttpMethod::from_method(method)?;
 
     let route_part = filename
         .strip_prefix("GET.")
@@ -189,8 +201,8 @@ fn match_path_pattern(pattern: &str, path: &str) -> Option<HashMap<String, Strin
     let mut params = HashMap::new();
 
     for (pattern_part, path_part) in pattern_parts.iter().zip(path_parts.iter()) {
-        if pattern_part.starts_with(':') {
-            params.insert(pattern_part[1..].to_string(), path_part.to_string());
+        if let Some(stripped) = pattern_part.strip_prefix(':') {
+            params.insert(stripped.to_string(), path_part.to_string());
         } else if *pattern_part != *path_part {
             return None;
         }

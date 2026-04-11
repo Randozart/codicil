@@ -35,9 +35,8 @@ impl Handler {
         ));
 
         // println!("DEBUG: Writing brief code to {}:\n{}", temp_file.display(), brief_code);
-        
-        std::fs::write(&temp_file, brief_code)
-            .map_err(|e| HandlerError::Io(e.to_string()))?;
+
+        std::fs::write(&temp_file, brief_code).map_err(|e| HandlerError::Io(e.to_string()))?;
 
         let context_json = serde_json::json!({
             "method": ctx.method,
@@ -54,8 +53,10 @@ impl Handler {
         std::fs::write(&context_file, context_json.to_string())
             .map_err(|e| HandlerError::Io(e.to_string()))?;
 
-        let brief_path = std::env::var("BRIEF_PATH")
-            .unwrap_or_else(|_| "/home/randozart/Desktop/Projects/brief-compiler/target/release/brief-compiler".to_string());
+        let brief_path = std::env::var("BRIEF_PATH").unwrap_or_else(|_| {
+            "/home/randozart/Desktop/Projects/brief-compiler/target/release/brief-compiler"
+                .to_string()
+        });
 
         // Note: The brief compiler doesn't support global options properly
         // Skip proof verification by using simpler contracts in route_file.rs
@@ -74,7 +75,7 @@ impl Handler {
             && stderr.contains("error[P010]:")
             && !stderr.contains("error[P008]:")  // No proof failure
             && !stderr.contains("error[B")         // No other compile errors
-            && !stderr.contains("error[C");       // No type errors
+            && !stderr.contains("error[C"); // No type errors
 
         if !output.status.success() && !has_only_trivial_errors {
             return Err(HandlerError::CompilationFailed(format!(
@@ -85,27 +86,23 @@ impl Handler {
 
         // If only trivial errors, proceed with the output (which is empty for defn without body)
         // When there's no output, return a default response based on route
-        let mut response = Self::parse_response_from_output(&stdout, self.route_file.method.clone(), self.route_file.path.clone())?;
-        
-        // The brief compiler just prints "Execution completed successfully" - 
-        // we need to extract the actual term value from the route file
-        // So we'll always try to extract from route file for now
-        response = Self::extract_response_from_route(&self.route_file);
+        // Extract the actual term value from the route file
+        let response = Self::extract_response_from_route(&self.route_file);
 
         Ok(response)
     }
 
     fn extract_response_from_route(route_file: &RouteFile) -> Response {
         let brief_code = &route_file.brief_code;
-        
+
         // Look for term "string" in brief_code
         if let Some(term_start) = brief_code.find("term ") {
             let rest = &brief_code[term_start + 5..];
-            
+
             // Find the opening quote
             if let Some(quote_pos) = rest.find('"') {
                 let after_quote = &rest[quote_pos + 1..];
-                
+
                 // Find the closing quote (handling escaped quotes)
                 let mut found_escape = false;
                 let mut end_pos = 0;
@@ -119,7 +116,7 @@ impl Handler {
                         found_escape = false;
                     }
                 }
-                
+
                 if end_pos > 0 {
                     let value = &after_quote[..end_pos];
                     let unescaped = value.replace("\\\"", "\"").replace("\\n", "\n");
@@ -127,7 +124,7 @@ impl Handler {
                 }
             }
         }
-        
+
         // Default fallback
         Response::new(200, "{}".to_string())
     }
@@ -138,12 +135,14 @@ impl Handler {
         }
 
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(output) {
-            let status = json.get("status")
+            let status = json
+                .get("status")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u16)
                 .unwrap_or(200);
 
-            let body = json.get("body")
+            let body = json
+                .get("body")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -177,7 +176,7 @@ impl ErrorHandler {
     pub async fn execute(&self, error: HandlerError, ctx: RequestContext) -> HandlerResult {
         let route_file = match RouteFile::parse(&self.error_route_path) {
             Ok(rf) => rf,
-            Err(e) => {
+            Err(_) => {
                 return Ok(self.default_error_response(error));
             }
         };
@@ -192,25 +191,18 @@ impl ErrorHandler {
         std::fs::create_dir_all(&temp_dir).map_err(|e| HandlerError::Io(e.to_string()))?;
 
         let temp_file = temp_dir.join("error.bv");
-        std::fs::write(&temp_file, brief_code)
-            .map_err(|e| HandlerError::Io(e.to_string()))?;
+        std::fs::write(&temp_file, brief_code).map_err(|e| HandlerError::Io(e.to_string()))?;
 
         let api_error = match &error {
-            HandlerError::PreconditionFailed(msg) => {
-                ApiError::bad_request(msg.clone())
-            }
-            HandlerError::PostconditionFailed(msg) => {
-                ApiError::internal_error(msg.clone())
-            }
+            HandlerError::PreconditionFailed(msg) => ApiError::bad_request(msg.clone()),
+            HandlerError::PostconditionFailed(msg) => ApiError::internal_error(msg.clone()),
             HandlerError::CompilationFailed(msg) => {
                 ApiError::internal_error(format!("Compilation failed: {}", msg))
             }
             HandlerError::BriefCompiler(msg) => {
                 ApiError::internal_error(format!("Brief compiler error: {}", msg))
             }
-            HandlerError::Io(msg) => {
-                ApiError::internal_error(format!("IO error: {}", msg))
-            }
+            HandlerError::Io(msg) => ApiError::internal_error(format!("IO error: {}", msg)),
         };
 
         let context_json = serde_json::json!({
@@ -233,8 +225,10 @@ impl ErrorHandler {
         std::fs::write(&context_file, context_json.to_string())
             .map_err(|e| HandlerError::Io(e.to_string()))?;
 
-        let brief_path = std::env::var("BRIEF_PATH")
-            .unwrap_or_else(|_| "/home/randozart/Desktop/Projects/brief-compiler/target/release/brief-compiler".to_string());
+        let brief_path = std::env::var("BRIEF_PATH").unwrap_or_else(|_| {
+            "/home/randozart/Desktop/Projects/brief-compiler/target/release/brief-compiler"
+                .to_string()
+        });
 
         let output = Command::new(&brief_path)
             .arg("build")
@@ -245,7 +239,11 @@ impl ErrorHandler {
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
         if output.status.success() && !stdout.trim().is_empty() {
-            return Handler::parse_response_from_output(&stdout, "ERROR".to_string(), "/[error]".to_string());
+            return Handler::parse_response_from_output(
+                &stdout,
+                "ERROR".to_string(),
+                "/[error]".to_string(),
+            );
         }
 
         Ok(self.default_error_response(error))
@@ -253,21 +251,15 @@ impl ErrorHandler {
 
     fn default_error_response(&self, error: HandlerError) -> Response {
         let api_error = match error {
-            HandlerError::PreconditionFailed(msg) => {
-                ApiError::bad_request(msg)
-            }
-            HandlerError::PostconditionFailed(msg) => {
-                ApiError::internal_error(msg)
-            }
+            HandlerError::PreconditionFailed(msg) => ApiError::bad_request(msg),
+            HandlerError::PostconditionFailed(msg) => ApiError::internal_error(msg),
             HandlerError::CompilationFailed(msg) => {
                 ApiError::internal_error(format!("Compilation failed: {}", msg))
             }
             HandlerError::BriefCompiler(msg) => {
                 ApiError::internal_error(format!("Brief compiler error: {}", msg))
             }
-            HandlerError::Io(msg) => {
-                ApiError::internal_error(format!("IO error: {}", msg))
-            }
+            HandlerError::Io(msg) => ApiError::internal_error(format!("IO error: {}", msg)),
         };
 
         api_error.to_response(500)

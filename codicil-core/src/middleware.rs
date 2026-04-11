@@ -40,7 +40,7 @@ impl Middleware {
         })
     }
 
-    pub async fn execute(&self, ctx: &mut RequestContext) -> Result<(), MiddlewareError> {
+    pub async fn execute(&self, _ctx: &mut RequestContext) -> Result<(), MiddlewareError> {
         tracing::info!("Executing middleware: {}", self.name);
         Ok(())
     }
@@ -69,7 +69,10 @@ impl MiddlewareChain {
         Ok(chain)
     }
 
-    pub async fn execute(&self, mut ctx: RequestContext) -> Result<RequestContext, MiddlewareError> {
+    pub async fn execute(
+        &self,
+        mut ctx: RequestContext,
+    ) -> Result<RequestContext, MiddlewareError> {
         for mw in &self.middleware {
             mw.execute(&mut ctx).await?;
         }
@@ -98,6 +101,7 @@ impl MiddlewareBuilder {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn add(mut self, name: &str) -> Self {
         self.middleware_names.push(name.to_string());
         self

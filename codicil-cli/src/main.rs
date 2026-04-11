@@ -7,19 +7,19 @@ use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
     http::{HeaderMap, Method, StatusCode},
-    response::{Response, IntoResponse},
+    response::{IntoResponse, Response},
     routing::any,
     Router,
 };
-use tower_http::services::ServeDir;
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
+use codicil_core::{
+    is_relevant_file, watch_paths, BriefCompiler, ErrorHandler, Handler, MiddlewareChain,
+    RequestContext, RouteFile, Router as CodicilRouter,
+};
 use tokio::net::TcpListener;
 use tokio::time::interval;
-use codicil_core::{
-    BriefCompiler, ErrorHandler, Handler, MiddlewareChain, RequestContext, 
-    Router as CodicilRouter, RouteFile, is_relevant_file, watch_paths,
-};
+use tower_http::services::ServeDir;
 
 const FAVICON_SVG: &str = include_str!("../assets/favicon.svg");
 const LANDING_RBV: &str = include_str!("../assets/landing.rbv");
@@ -56,7 +56,6 @@ enum Cli {
 enum Generate {
     Model { name: String },
     Middleware { name: String },
-    Component { name: String },
 }
 
 #[tokio::main]
@@ -125,21 +124,26 @@ brief_path = ""
         // Full landing-page template
         let codicil_toml = LANDING_CODICIL_TOML.replace("landing-page", name);
         fs::write(project_dir.join("codicil.toml"), codicil_toml)?;
-        
+
         fs::write(project_dir.join("public/favicon.svg"), FAVICON_SVG)?;
         fs::write(project_dir.join("assets/favicon.svg"), FAVICON_SVG)?;
-        
+
         fs::write(project_dir.join("components/landing.rbv"), LANDING_RBV)?;
         fs::write(project_dir.join("styles/globals.css"), GLOBALS_CSS)?;
         fs::write(project_dir.join("routes/index.bv"), INDEX_BV)?;
         fs::write(project_dir.join("routes/GET.hints.bv"), GET_HINTS_BV)?;
-        
+
         let build_dir = project_dir.join("public/build");
         fs::create_dir_all(&build_dir)?;
 
         println!("Compiling landing page...");
         let output = Command::new("brief")
-            .args(["rbv", "--out", build_dir.to_str().unwrap(), project_dir.join("components/landing.rbv").to_str().unwrap()])
+            .args([
+                "rbv",
+                "--out",
+                build_dir.to_str().unwrap(),
+                project_dir.join("components/landing.rbv").to_str().unwrap(),
+            ])
             .output()?;
 
         if !output.status.success() {
@@ -193,7 +197,7 @@ fn serve_static_file(path: &Path) -> Response {
         Some("jpg") | Some("jpeg") => ("image/jpeg", true),
         _ => ("application/octet-stream", false),
     };
-    
+
     if is_binary {
         match std::fs::read(path) {
             Ok(bytes) => Response::builder()
@@ -224,23 +228,29 @@ fn serve_static_file(path: &Path) -> Response {
 fn recompile_rbv_components(project_path: &Path) {
     let components_dir = project_path.join("components");
     let build_dir = project_path.join("public/build");
-    
+
     if !components_dir.exists() {
         return;
     }
-    
+
     if let Ok(entries) = std::fs::read_dir(&components_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().map(|e| e == "rbv").unwrap_or(false) {
-                let filename = path.file_stem()
+                let filename = path
+                    .file_stem()
                     .and_then(|n| n.to_str())
                     .unwrap_or("component");
-                
+
                 let output = std::process::Command::new("brief")
-                    .args(["rbv", "--out", build_dir.to_str().unwrap(), path.to_str().unwrap()])
+                    .args([
+                        "rbv",
+                        "--out",
+                        build_dir.to_str().unwrap(),
+                        path.to_str().unwrap(),
+                    ])
                     .output();
-                
+
                 match output {
                     Ok(o) if o.status.success() => {
                         println!("  Compiled {} successfully", filename);
@@ -286,19 +296,20 @@ async fn cmd_dev(path: &str) -> Result<()> {
     };
 
     let addr = format!("{}:{}", host, port);
-    
+
     println!("Discovering routes...");
     let codicil_router = CodicilRouter::discover_routes(&project_path)?;
     let routes: Vec<_> = codicil_router.routes().collect();
     println!("Discovered {} routes:", routes.len());
     for route in &routes {
-        println!("  {} {}", format!("{:?}", route.method), route.path);
+        println!("  {:?} {}", route.method, route.path);
     }
 
     println!("Dev server running at http://{}", addr);
     println!("Watching for file changes (Ctrl+C to stop)...\n");
 
-    let watcher = watch_paths(&project_path).map_err(|e| anyhow::anyhow!("Failed to watch files: {}", e))?;
+    let watcher =
+        watch_paths(&project_path).map_err(|e| anyhow::anyhow!("Failed to watch files: {}", e))?;
 
     let public_path = project_path.join("public");
 
@@ -311,21 +322,21 @@ async fn cmd_dev(path: &str) -> Result<()> {
         .fallback_service(ServeDir::new(&public_path));
 
     let listener = TcpListener::bind(&addr).await?;
-    
+
     let server = axum::serve(listener, app);
-    
+
     let server_handle = tokio::spawn(async {
         if let Err(e) = server.await {
             eprintln!("Server error: {}", e);
         }
     });
-    
+
     let mut reload_interval = interval(Duration::from_secs(1));
-    
+
     loop {
         tokio::select! {
             biased;
-            
+
             _ = tokio::signal::ctrl_c() => {
                 println!("\nShutting down...");
                 break;
@@ -342,10 +353,10 @@ async fn cmd_dev(path: &str) -> Result<()> {
                             }
                         })
                         .collect();
-                    
+
                     if !relevant.is_empty() {
                         println!("\nFile changed: {:?}", relevant);
-                        
+
                         let rbv_changes: Vec<_> = relevant.iter()
                             .filter(|e| {
                                 if let codicil_core::FileEvent::Changed(p) = e {
@@ -355,19 +366,19 @@ async fn cmd_dev(path: &str) -> Result<()> {
                                 }
                             })
                             .collect();
-                        
+
                         if !rbv_changes.is_empty() {
                             println!("Recompiling RBV files...");
                             recompile_rbv_components(&project_path);
                         }
-                        
+
                         println!("Reloading routes...");
                         match CodicilRouter::discover_routes(&project_path) {
                             Ok(router) => {
                                 let routes: Vec<_> = router.routes().collect();
                                 println!("Discovered {} routes:", routes.len());
                                 for route in &routes {
-                                    println!("  {} {}", format!("{:?}", route.method), route.path);
+                                    println!("  {:?} {}", route.method, route.path);
                                 }
                             }
                             Err(e) => {
@@ -380,8 +391,8 @@ async fn cmd_dev(path: &str) -> Result<()> {
             }
         }
     }
-    
-    let _ = server_handle.abort();
+
+    server_handle.abort();
 
     Ok(())
 }
@@ -395,15 +406,12 @@ async fn handle_root(
 ) -> Response {
     let landing_path = state.project_path.join("public/build/landing.html");
     if landing_path.exists() {
-        match std::fs::read_to_string(&landing_path) {
-            Ok(html) => {
-                return Response::builder()
-                    .status(200)
-                    .header("Content-Type", "text/html")
-                    .body(Body::from(html))
-                    .unwrap();
-            }
-            Err(_) => {}
+        if let Ok(html) = std::fs::read_to_string(&landing_path) {
+            return Response::builder()
+                .status(200)
+                .header("Content-Type", "text/html")
+                .body(Body::from(html))
+                .unwrap();
         }
     }
     handle_request_internal(state, method, headers, "/", query_params, body).await
@@ -418,13 +426,13 @@ async fn handle_catchall(
     body: Bytes,
 ) -> Response {
     let path = format!("/{}", path);
-    
+
     // Check for static file in public/build/ first
     let build_path = state.project_path.join("public/build").join(&path[1..]);
     if build_path.is_file() {
         return serve_static_file(&build_path);
     }
-    
+
     handle_request_internal(state, method, headers, &path, query_params, body).await
 }
 
@@ -436,7 +444,6 @@ async fn handle_request_internal(
     query_params: std::collections::HashMap<String, String>,
     body: Bytes,
 ) -> Response {
-    
     let codicil_router = match CodicilRouter::discover_routes(&state.project_path) {
         Ok(r) => r,
         Err(_) => {
@@ -447,10 +454,10 @@ async fn handle_request_internal(
         }
     };
 
-    let http_method = codicil_core::HttpMethod::from_str(method.as_str())
+    let http_method = codicil_core::HttpMethod::from_method(method.as_str())
         .unwrap_or(codicil_core::HttpMethod::GET);
-    
-    let route_match = match codicil_router.find_route(&http_method, &path) {
+
+    let route_match = match codicil_router.find_route(&http_method, path) {
         Some(m) => m,
         None => {
             return Response::builder()
@@ -484,7 +491,8 @@ async fn handle_request_internal(
     ctx = ctx.with_body(body_str);
 
     if !route_file.middleware.is_empty() {
-        if let Ok(chain) = MiddlewareChain::from_names(&route_file.middleware, &state.project_path) {
+        if let Ok(chain) = MiddlewareChain::from_names(&route_file.middleware, &state.project_path)
+        {
             match chain.execute(ctx).await {
                 Ok(modified_ctx) => {
                     ctx = modified_ctx;
@@ -514,15 +522,12 @@ async fn handle_request_internal(
             if let Some(error_path) = error_route {
                 let error_handler = ErrorHandler::new(error_path);
                 let ctx = RequestContext::new(method.to_string(), path.to_string());
-                match error_handler.execute(e.clone(), ctx).await {
-                    Ok(response) => {
-                        let mut builder = Response::builder().status(response.status);
-                        for (key, value) in response.headers {
-                            builder = builder.header(&key, &value);
-                        }
-                        return builder.body(Body::from(response.body)).unwrap();
+                if let Ok(response) = error_handler.execute(e.clone(), ctx).await {
+                    let mut builder = Response::builder().status(response.status);
+                    for (key, value) in response.headers {
+                        builder = builder.header(&key, &value);
                     }
-                    Err(_) => {}
+                    return builder.body(Body::from(response.body)).unwrap();
                 }
             }
             Response::builder()
@@ -558,8 +563,8 @@ fn cmd_build(path: &str) -> Result<()> {
     let mut route_manifest: Vec<serde_json::Value> = Vec::new();
 
     for route in &routes {
-        print!("  Building {} {}", format!("{:?}", route.method), route.path);
-        
+        print!("  Building {} {}", route.method, route.path);
+
         let route_file = match RouteFile::parse(&route.file_path) {
             Ok(rf) => rf,
             Err(e) => {
@@ -580,8 +585,8 @@ fn cmd_build(path: &str) -> Result<()> {
         fs::create_dir_all(&temp_dir)?;
         let temp_file = temp_dir.join(format!(
             "{}.{}.bv",
-            format!("{:?}", route.method),
-            route.path.replace("/", "_").replace(":", "_")
+            route.method,
+            route.path.replace(['/', ':'], "_")
         ));
         fs::write(&temp_file, brief_code)?;
 
@@ -598,18 +603,23 @@ fn cmd_build(path: &str) -> Result<()> {
             Ok(build_result) => {
                 // Check if build failed only due to trivial pre/post conditions (P009/P010)
                 let stderr = &build_result.stderr;
-                let has_only_trivial_errors = stderr.contains("error[P009]:") 
+                let has_only_trivial_errors = stderr.contains("error[P009]:")
                     && stderr.contains("error[P010]:")
                     && !stderr.contains("error[P008]:")
-                    && !stderr.contains("error[B") 
+                    && !stderr.contains("error[B")
                     && !stderr.contains("error[C");
 
                 if build_result.success || has_only_trivial_errors {
                     let out_path = dist_path.join("routes").join(
-                        route.file_path.file_name().unwrap_or_default().to_str().unwrap_or("route.bv")
+                        route
+                            .file_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_str()
+                            .unwrap_or("route.bv"),
                     );
                     fs::copy(&route.file_path, &out_path)?;
-                    
+
                     route_manifest.push(serde_json::json!({
                         "method": format!("{:?}", route.method),
                         "path": route.path,
@@ -675,12 +685,15 @@ fn cmd_generate(command: &Generate) -> Result<()> {
         Generate::Model { name } => {
             let singular = name.to_lowercase();
             let plural = format!("{}s", singular);
-            
+
             let model_content = format!(
                 "# lib/{}.bv\nstruct {{}}\n    id: Int;\n    name: String;\n    created_at: Int;\n}}\n\ntxn create {{\n    term;\n}};\n\ntxn find {{\n    term;\n}};\n\ntxn update {{\n    term;\n}};\n\ntxn delete {{\n    term;\n}};\n\ntxn list {{\n    term;\n}};",
                 singular
             );
-            fs::write(Path::new("lib").join(format!("{}.bv", singular)), model_content)?;
+            fs::write(
+                Path::new("lib").join(format!("{}.bv", singular)),
+                model_content,
+            )?;
 
             fs::write(
                 Path::new("routes").join(format!("GET.{}.bv", plural)),
@@ -731,31 +744,12 @@ fn cmd_generate(command: &Generate) -> Result<()> {
             println!("  - routes/DELETE.{}.[id].bv", plural);
         }
         Generate::Middleware { name } => {
-            let middleware_path = Path::new("middleware").join(format!("{}.bv", name.to_lowercase()));
+            let middleware_path =
+                Path::new("middleware").join(format!("{}.bv", name.to_lowercase()));
             let content = "[route]\n\ntxn handle {\n    term;\n};\n";
             std::fs::write(&middleware_path, content)?;
             println!("Created middleware '{}'", name);
             println!("  - middleware/{}.bv", name.to_lowercase());
-        }
-        Generate::Component { name } => {
-            let component_path = Path::new("components").join(format!("{}.rbv", name.to_lowercase()));
-            let component_tag = format!("<{} />", name);
-            let content = format!(
-                "<script type=\"brief\">\nrstruct {name} {{\n    value: String;\n\n    txn update {{\n        term;\n    }};\n}}\n\n<div class=\"{name}\">\n    <span b-text=\"value\">Empty</span>\n    <button b-trigger:click=\"update\">Update</button>\n</div>\n</script>\n\n<view>\n    {component_tag}\n</view>\n"
-            );
-            std::fs::write(&component_path, content)?;
-            println!("Created component '{}'", name);
-            println!("  - components/{}.rbv", name.to_lowercase());
-        }
-        Generate::Component { name } => {
-            let component_path = Path::new("components").join(format!("{}.rbv", name.to_lowercase()));
-            let content = format!(
-                "<script type=\"brief\">\nrstruct {{}}\n    value: String;\n\n    txn update [true][post] {{\n        term;\n    }};\n}}\n\n<div class=\"{}\">\n    <span b-text=\"value\">Empty</span>\n    <button b-trigger:click=\"update\">Update</button>\n</div>\n</script>\n\n<view>\n    <{} />\n</view>\n",
-                name.to_lowercase(), name
-            );
-            std::fs::write(&component_path, content)?;
-            println!("Created component '{}'", name);
-            println!("  - components/{}.rbv", name.to_lowercase());
         }
     }
     Ok(())
