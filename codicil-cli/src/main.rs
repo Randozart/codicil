@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,6 +47,10 @@ enum Cli {
         #[arg(default_value = ".")]
         path: String,
     },
+    Check {
+        #[arg(default_value = ".")]
+        path: String,
+    },
     Generate {
         #[command(subcommand)]
         command: Generate,
@@ -74,6 +79,9 @@ async fn main() -> Result<()> {
         Cli::Build { path } => {
             cmd_build(&path)?;
         }
+        Cli::Check { path } => {
+            cmd_check(&path)?;
+        }
         Cli::Generate { command } => {
             cmd_generate(&command)?;
         }
@@ -84,7 +92,6 @@ async fn main() -> Result<()> {
 
 fn cmd_init(name: &str, no_template: bool) -> Result<()> {
     use std::fs;
-    use std::process::Command;
 
     let project_dir = Path::new(name);
     if project_dir.exists() {
@@ -162,6 +169,224 @@ fs::write(project_dir.join(".env.example"), env_example)?;
     }
     println!("  cd {} && codi dev", name);
     Ok(())
+}
+
+fn cmd_check(path: &str) -> Result<()> {
+    use std::process::Command;
+
+    let project_path = Path::new(path);
+    let routes_dir = project_path.join("routes");
+    let src_dir = project_path.join("src");
+    let components_dir = project_path.join("components");
+
+    if !routes_dir.exists() && !src_dir.exists() {
+        anyhow::bail!("No routes or src directory found in {}", path);
+    }
+
+    let mut has_errors = false;
+
+    // Create temp directory
+    let temp_dir = project_path.join(".codicil-check");
+    if temp_dir.exists() {
+        std::fs::remove_dir_all(&temp_dir)?;
+    }
+    std::fs::create_dir_all(&temp_dir)?;
+
+    // Copy ALL files recursively to preserve complete directory structure
+    fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
+        if !src.exists() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            if src_path.is_dir() {
+                copy_recursive(&src_path, &dst_path)?;
+            } else {
+                std::fs::copy(&src_path, &dst_path)?;
+            }
+        }
+        Ok(())
+    }
+
+    // Copy complete directory structure
+    if routes_dir.exists() {
+        copy_recursive(&routes_dir, &temp_dir.join("routes"))?;
+    }
+    if src_dir.exists() {
+        copy_recursive(&src_dir, &temp_dir.join("src"))?;
+    }
+    if components_dir.exists() {
+        copy_recursive(&components_dir, &temp_dir.join("components"))?;
+    }
+
+    // Check .bv route files
+    if routes_dir.exists() {
+        println!("Checking route files...");
+        for entry in std::fs::read_dir(&routes_dir)? {
+            let entry = entry?;
+            let file_path = entry.path();
+            if file_path.extension().map_or(false, |ext| ext == "bv") {
+                print!("  {}: ", file_path.file_name().unwrap().to_string_lossy());
+                
+                // Extract Brief code using RouteFile
+                let content = std::fs::read_to_string(&file_path)?;
+                let route_file = RouteFile::parse_content(&content, &file_path).map_err(|e| anyhow::anyhow!("Failed to parse route file: {}", e))?;
+                
+                let brief_code = route_file.brief_code;
+                
+                if brief_code.trim().is_empty() {
+                    println!("[SKIP] No Brief code found");
+                    continue;
+                }
+
+                // Write to temp file in project directory so imports resolve correctly
+                let temp_file = temp_dir.join("routes").join(file_path.file_name().unwrap());
+                std::fs::create_dir_all(temp_file.parent().unwrap())?;
+                std::fs::write(&temp_file, &brief_code)?;
+
+                // Run brief check (path must be absolute)
+                let output = Command::new("brief")
+                    .arg("check")
+                    .arg(temp_file.canonicalize()?)
+                    .output()?;
+
+                if output.status.success() {
+                    println!("[OK]");
+                } else {
+                    println!("[FAIL]");
+                    eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+                    has_errors = true;
+                }
+            }
+        }
+    }
+
+    // Check .rbv component files by checking the copied .bv versions
+    let temp_rbv_paths = vec![
+        temp_dir.join("components"),
+        temp_dir.join("src/components"),
+        temp_dir.join("src/pages"),
+    ];
+
+    for rbv_base in temp_rbv_paths {
+        if !rbv_base.exists() {
+            continue;
+        }
+
+        println!("Checking component files...");
+        check_temp_bv_directory(&rbv_base, project_path, &mut has_errors)?;
+    }
+
+    if has_errors {
+        anyhow::bail!("Check failed - see errors above");
+    }
+
+    println!("\nAll checks passed!");
+    Ok(())
+}
+
+fn check_temp_bv_directory(dir: &Path, _project_path: &Path, has_errors: &mut bool) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            check_temp_bv_directory(&path, _project_path, has_errors)?;
+        } else if path.extension().map_or(false, |ext| ext == "bv") {
+            print!("  {}: ", path.file_name().unwrap().to_string_lossy());
+
+            // Run brief check on the already-copied file
+            let output = Command::new("brief")
+                .arg("check")
+                .arg(path.canonicalize()?)
+                .output()?;
+
+            if output.status.success() {
+                println!("[OK]");
+            } else {
+                println!("[FAIL]");
+                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+                *has_errors = true;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_rbv_directory(dir: &Path, project_path: &Path, has_errors: &mut bool) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            check_rbv_directory(&path, project_path, has_errors)?;
+        } else if path.extension().map_or(false, |ext| ext == "rbv") {
+            print!("  {}: ", path.file_name().unwrap().to_string_lossy());
+
+            // Extract Brief code from <script> block
+            let content = std::fs::read_to_string(&path)?;
+            let brief_code = extract_script_from_rbv(&content);
+
+            if brief_code.trim().is_empty() {
+                println!("[SKIP] No Brief code found");
+                continue;
+            }
+
+            // Write to temp file in project directory so imports resolve correctly
+            let temp_dir = project_path.join(".codicil-check");
+            std::fs::create_dir_all(&temp_dir)?;
+            
+            // Create mirror directory structure
+            let relative_path = path.strip_prefix(project_path).unwrap_or(&path);
+            let target_dir = temp_dir.join(relative_path.parent().unwrap_or(relative_path));
+            std::fs::create_dir_all(&target_dir)?;
+            
+            let stem = path.file_stem().unwrap().to_string_lossy();
+            let temp_file = target_dir.join(format!("{}.bv", stem));
+            std::fs::write(&temp_file, &brief_code)?;
+
+            // Run brief check (path must be absolute)
+            let output = Command::new("brief")
+                .arg("check")
+                .arg(temp_file.canonicalize()?)
+                .output()?;
+
+            if output.status.success() {
+                println!("[OK]");
+            } else {
+                println!("[FAIL]");
+                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+                *has_errors = true;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn extract_script_from_rbv(content: &str) -> String {
+    let mut result = String::new();
+    let mut in_script = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("<script") {
+            in_script = true;
+            continue;
+        }
+        if trimmed == "</script>" {
+            in_script = false;
+            continue;
+        }
+        if in_script {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    result
 }
 
 #[derive(Clone)]
