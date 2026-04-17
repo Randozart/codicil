@@ -28,26 +28,61 @@ impl BriefCompiler {
     }
 
     fn find_brief() -> Result<PathBuf, CompilerError> {
+        // Check BRIEF_PATH environment variable first
         if let Ok(path) = std::env::var("BRIEF_PATH") {
             let path = PathBuf::from(path);
             if path.exists() {
                 return Ok(path);
             }
+            eprintln!(
+                "Warning: BRIEF_PATH set to {:?} but file does not exist",
+                path
+            );
         }
 
+        // Check local build
         let local_path = PathBuf::from("target/release/brief-compiler");
         if local_path.exists() {
             return Ok(local_path);
         }
 
-        let installed = PathBuf::from("/home/randozart/.local/bin/brief");
-        if installed.exists() {
-            return Ok(installed);
+        // Check various common installation paths
+        let search_paths = vec![
+            PathBuf::from("/usr/local/bin/brief"),
+            PathBuf::from("/usr/bin/brief"),
+            PathBuf::from("$HOME/.cargo/bin/brief"),
+            PathBuf::from("$HOME/.local/bin/brief"),
+        ];
+
+        for path in search_paths {
+            let expanded = path
+                .to_str()
+                .unwrap_or("")
+                .replace("$HOME", &std::env::var("HOME").unwrap_or_default());
+            let expanded = PathBuf::from(expanded);
+            if expanded.exists() {
+                return Ok(expanded);
+            }
         }
 
-        let usr_local = PathBuf::from("/usr/local/bin/brief");
-        if usr_local.exists() {
-            return Ok(usr_local);
+        // Try using 'which' command to find brief
+        if let Ok(output) = Command::new("which").arg("brief").output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() && PathBuf::from(&path).exists() {
+                    return Ok(PathBuf::from(path));
+                }
+            }
+        }
+
+        // Try using 'brief' directly (might be in PATH)
+        if Command::new("brief")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Ok(PathBuf::from("brief"));
         }
 
         Err(CompilerError::NotFound(PathBuf::from("brief")))

@@ -53,10 +53,7 @@ impl Handler {
         std::fs::write(&context_file, context_json.to_string())
             .map_err(|e| HandlerError::Io(e.to_string()))?;
 
-        let brief_path = std::env::var("BRIEF_PATH").unwrap_or_else(|_| {
-            "/home/randozart/Desktop/Projects/brief-compiler/target/release/brief-compiler"
-                .to_string()
-        });
+        let brief_path = std::env::var("BRIEF_PATH").unwrap_or_else(|_| "brief".to_string());
 
         // Note: The brief compiler doesn't support global options properly
         // Skip proof verification by using simpler contracts in route_file.rs
@@ -64,7 +61,10 @@ impl Handler {
             .arg("build")
             .arg(&temp_file)
             .output()
-            .map_err(|e| HandlerError::BriefCompiler(e.to_string()))?;
+            .map_err(|e| {
+                eprintln!("ERROR: Failed to run Brief compiler at '{}': {}", brief_path, e);
+                HandlerError::BriefCompiler(e.to_string())
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -225,16 +225,16 @@ impl ErrorHandler {
         std::fs::write(&context_file, context_json.to_string())
             .map_err(|e| HandlerError::Io(e.to_string()))?;
 
-        let brief_path = std::env::var("BRIEF_PATH").unwrap_or_else(|_| {
-            "/home/randozart/Desktop/Projects/brief-compiler/target/release/brief-compiler"
-                .to_string()
-        });
+        let brief_path = std::env::var("BRIEF_PATH").unwrap_or_else(|_| "brief".to_string());
 
         let output = Command::new(&brief_path)
             .arg("build")
             .arg(&temp_file)
             .output()
-            .map_err(|e| HandlerError::BriefCompiler(e.to_string()))?;
+            .map_err(|e| {
+                eprintln!("ERROR: Failed to run Brief compiler at '{}': {}", brief_path, e);
+                HandlerError::BriefCompiler(e.to_string())
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 

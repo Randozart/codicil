@@ -96,14 +96,12 @@ fn cmd_init(name: &str, no_template: bool) -> Result<()> {
     fs::create_dir_all(project_dir.join("middleware"))?;
     fs::create_dir_all(project_dir.join("components"))?;
     fs::create_dir_all(project_dir.join("migrations"))?;
-    fs::create_dir_all(project_dir.join("public"))?;
+    fs::create_dir_all(project_dir.join("public/build"))?;
     fs::create_dir_all(project_dir.join("assets"))?;
     fs::create_dir_all(project_dir.join("styles"))?;
 
-    if no_template {
-        // Empty project scaffold
-        let codicil_toml = format!(
-            r#"# Codicil Project Configuration
+    let codicil_toml = format!(
+        r#"# Codicil Project Configuration
 [project]
 name = "{}"
 version = "0.1.0"
@@ -115,52 +113,47 @@ port = 3000
 [build]
 brief_path = ""
 "#,
-            name
-        );
-        fs::write(project_dir.join("codicil.toml"), codicil_toml)?;
-        fs::write(project_dir.join("lib/.gitkeep"), "")?;
-        fs::write(project_dir.join("middleware/.gitkeep"), "")?;
-    } else {
-        // Full landing-page template
-        let codicil_toml = LANDING_CODICIL_TOML.replace("landing-page", name);
-        fs::write(project_dir.join("codicil.toml"), codicil_toml)?;
+        name
+    );
+    fs::write(project_dir.join("codicil.toml"), codicil_toml)?;
 
-        fs::write(project_dir.join("public/favicon.svg"), FAVICON_SVG)?;
-        fs::write(project_dir.join("assets/favicon.svg"), FAVICON_SVG)?;
+    // Create default index route
+    let index_route = r#"[route]
+method = "GET"
+path = "/"
 
+txn handle [true][true] {
+    term "index";
+};
+"#;
+    fs::write(project_dir.join("routes/GET.index.bv"), index_route)?;
+
+    fs::write(project_dir.join("lib/.gitkeep"), "")?;
+    fs::write(project_dir.join("middleware/.gitkeep"), "")?;
+    fs::write(project_dir.join("public/favicon.svg"), FAVICON_SVG)?;
+    fs::write(project_dir.join("styles/globals.css"), "")?;
+
+    if !no_template {
+        // Full template - copy components and compile
         fs::write(project_dir.join("components/landing.rbv"), LANDING_RBV)?;
-        fs::write(project_dir.join("styles/globals.css"), GLOBALS_CSS)?;
-        fs::write(project_dir.join("routes/index.bv"), INDEX_BV)?;
         fs::write(project_dir.join("routes/GET.hints.bv"), GET_HINTS_BV)?;
 
         let build_dir = project_dir.join("public/build");
-        fs::create_dir_all(&build_dir)?;
-
         println!("Compiling landing page...");
         let output = Command::new("brief")
-            .args([
-                "rbv",
-                "--out",
-                build_dir.to_str().unwrap(),
-                project_dir.join("components/landing.rbv").to_str().unwrap(),
-            ])
+            .args(["rbv", "--out", build_dir.to_str().unwrap(),
+                   project_dir.join("components/landing.rbv").to_str().unwrap()])
             .output()?;
-
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("Warning: Failed to compile landing page: {}", stderr);
-        } else {
-            println!("Landing page compiled successfully");
+            eprintln!("Warning: Failed to compile: {}", String::from_utf8_lossy(&output.stderr));
         }
-
-        fs::write(project_dir.join("lib/.gitkeep"), "")?;
     }
 
     let env_example = r#"# Environment variables
 DATABASE_URL=postgresql://localhost:5432/mydb
 JWT_SECRET=your-secret-key
 "#;
-    fs::write(project_dir.join(".env.example"), env_example)?;
+fs::write(project_dir.join(".env.example"), env_example)?;
 
     if no_template {
         println!("Created empty project '{}'", name);
@@ -185,16 +178,20 @@ async fn handle_favicon() -> impl IntoResponse {
 }
 
 fn serve_static_file(path: &Path) -> Response {
-    // Determine content type and binary mode from extension
     let (content_type, is_binary) = match path.extension().and_then(|s| s.to_str()) {
-        Some("js") => ("application/javascript", false),
+        Some("js") | Some("mjs") => ("application/javascript", false),
         Some("css") => ("text/css", false),
         Some("wasm") => ("application/wasm", true),
-        Some("html") => ("text/html", false),
+        Some("html") | Some("htm") => ("text/html", false),
         Some("svg") => ("image/svg+xml", false),
         Some("json") => ("application/json", false),
         Some("png") => ("image/png", true),
         Some("jpg") | Some("jpeg") => ("image/jpeg", true),
+        Some("gif") => ("image/gif", true),
+        Some("ico") => ("image/x-icon", true),
+        Some("woff") => ("font/woff", false),
+        Some("woff2") => ("font/woff2", false),
+        Some("ttf") => ("font/ttf", false),
         _ => ("application/octet-stream", false),
     };
 
@@ -291,6 +288,59 @@ async fn cmd_dev(path: &str) -> Result<()> {
 
     let _ = BriefCompiler::new().ok();
 
+    // Auto-compile RBV components if needed
+    let build_dir = project_path.join("public/build");
+    let components_dir = project_path.join("components");
+
+    if components_dir.exists() {
+        let html_path = build_dir.join("landing.html");
+        let needs_recompile = if !html_path.exists() {
+            println!("No compiled output found, will compile...");
+            true
+        } else if let Ok(entries) = std::fs::read_dir(&components_dir) {
+            let html_mtime = std::fs::metadata(&html_path).and_then(|m| m.modified()).ok();
+            let mut needs = false;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("rbv") {
+                    if let Ok(rbv_mtime) = path.metadata().and_then(|m| m.modified()) {
+                        if let Some(html_time) = html_mtime {
+                            if rbv_mtime > html_time {
+                                needs = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            needs
+        } else {
+            false
+        };
+
+        if needs_recompile || !html_path.exists() {
+            println!("Compiling components...");
+            if let Ok(entries) = std::fs::read_dir(&components_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("rbv") {
+                        let filename = path.file_stem().and_then(|n| n.to_str()).unwrap_or("component");
+                        let output = std::process::Command::new("brief")
+                            .args(["rbv", "--out", build_dir.to_str().unwrap(), path.to_str().unwrap()])
+                            .output();
+                        match output {
+                            Ok(o) if o.status.success() => println!("  Compiled {}", filename),
+                            Ok(o) => eprintln!("  FAIL {}: {}", filename, String::from_utf8_lossy(&o.stderr)),
+                            Err(e) => eprintln!("  FAIL {}: {}", filename, e),
+                        }
+                    }
+                }
+            }
+        } else {
+            println!("Components up to date.");
+        }
+    }
+
     let state = AppState {
         project_path: Arc::new(project_path.clone()),
     };
@@ -311,7 +361,7 @@ async fn cmd_dev(path: &str) -> Result<()> {
     let watcher =
         watch_paths(&project_path).map_err(|e| anyhow::anyhow!("Failed to watch files: {}", e))?;
 
-    let public_path = project_path.join("public");
+    let build_path = project_path.join("public/build");
 
     let app = Router::new()
         .route("/favicon.ico", any(handle_favicon))
@@ -319,7 +369,7 @@ async fn cmd_dev(path: &str) -> Result<()> {
         .route("/", any(handle_root))
         .route("/*path", any(handle_catchall))
         .with_state(state)
-        .fallback_service(ServeDir::new(&public_path));
+        .fallback_service(ServeDir::new(&build_path));
 
     let listener = TcpListener::bind(&addr).await?;
 
@@ -405,7 +455,7 @@ async fn handle_root(
     body: Bytes,
 ) -> Response {
     let landing_path = state.project_path.join("public/build/landing.html");
-    if landing_path.exists() {
+    if landing_path.is_file() {
         if let Ok(html) = std::fs::read_to_string(&landing_path) {
             return Response::builder()
                 .status(200)
@@ -414,7 +464,22 @@ async fn handle_root(
                 .unwrap();
         }
     }
-    handle_request_internal(state, method, headers, "/", query_params, body).await
+
+    let index_path = state.project_path.join("public/index.html");
+    if index_path.is_file() {
+        if let Ok(html) = std::fs::read_to_string(&index_path) {
+            return Response::builder()
+                .status(200)
+                .header("Content-Type", "text/html")
+                .body(Body::from(html))
+                .unwrap();
+        }
+    }
+
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(Body::from("404 Not Found"))
+        .unwrap()
 }
 
 async fn handle_catchall(
@@ -425,15 +490,23 @@ async fn handle_catchall(
     Query(query_params): Query<std::collections::HashMap<String, String>>,
     body: Bytes,
 ) -> Response {
-    let path = format!("/{}", path);
+    let request_path = format!("/{}", path);
+    let path_stripped = path.trim_start_matches('/');
 
-    // Check for static file in public/build/ first
-    let build_path = state.project_path.join("public/build").join(&path[1..]);
+    // Check in public/build/
+    let build_path = state.project_path.join("public/build").join(path_stripped);
     if build_path.is_file() {
         return serve_static_file(&build_path);
     }
 
-    handle_request_internal(state, method, headers, &path, query_params, body).await
+    // Check in public/
+    let public_path = state.project_path.join("public").join(path_stripped);
+    if public_path.is_file() {
+        return serve_static_file(&public_path);
+    }
+
+    // Try route handler
+    handle_request_internal(state, method, headers, &request_path, query_params, body).await
 }
 
 async fn handle_request_internal(
