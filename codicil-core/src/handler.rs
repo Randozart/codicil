@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::compiler::BriefCompiler;
 use crate::context::{ApiError, RequestContext, Response};
 use crate::route_file::RouteFile;
 
@@ -19,6 +20,18 @@ impl Handler {
     }
 
     pub async fn execute(&self, ctx: RequestContext) -> HandlerResult {
+        // Check if this is an RBV component file (has <script> block) - compile it to HTML
+        if self.file_path.extension().and_then(|e| e.to_str()) == Some("rbv") {
+            let content = std::fs::read_to_string(&self.file_path)
+                .map_err(|e| HandlerError::Io(e.to_string()))?;
+            
+            // If it has <script>, it's an RBV component - compile to HTML
+            if content.contains("<script>") {
+                return self.execute_rbv_route().await;
+            }
+            // Otherwise fall through to normal Brief execution
+        }
+
         let brief_code = &self.route_file.brief_code;
 
         if brief_code.trim().is_empty() {
@@ -33,8 +46,6 @@ impl Handler {
             self.route_file.method,
             self.route_file.path.replace("/", "_").replace(":", "_")
         ));
-
-        // println!("DEBUG: Writing brief code to {}:\n{}", temp_file.display(), brief_code);
 
         std::fs::write(&temp_file, brief_code).map_err(|e| HandlerError::Io(e.to_string()))?;
 
@@ -53,29 +64,26 @@ impl Handler {
         std::fs::write(&context_file, context_json.to_string())
             .map_err(|e| HandlerError::Io(e.to_string()))?;
 
-        let brief_path = std::env::var("BRIEF_PATH").unwrap_or_else(|_| "brief".to_string());
+        let brief_compiler = BriefCompiler::new()
+            .map_err(|e| HandlerError::BriefCompiler(e.to_string()))?;
 
-        // Note: The brief compiler doesn't support global options properly
-        // Skip proof verification by using simpler contracts in route_file.rs
-        let output = Command::new(&brief_path)
+        let output = Command::new(&brief_compiler.path())
             .arg("build")
             .arg(&temp_file)
             .output()
             .map_err(|e| {
-                eprintln!("ERROR: Failed to run Brief compiler at '{}': {}", brief_path, e);
+                eprintln!("ERROR: Failed to run Brief compiler at '{}': {}", brief_compiler.path().display(), e);
                 HandlerError::BriefCompiler(e.to_string())
             })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        // Check if build failed only due to trivial pre/post conditions (P009/P010)
-        // These are treated as errors by the compiler but shouldn't block server routes
         let has_only_trivial_errors = stderr.contains("error[P009]:") 
             && stderr.contains("error[P010]:")
-            && !stderr.contains("error[P008]:")  // No proof failure
-            && !stderr.contains("error[B")         // No other compile errors
-            && !stderr.contains("error[C"); // No type errors
+            && !stderr.contains("error[P008]:")
+            && !stderr.contains("error[B")
+            && !stderr.contains("error[C");
 
         if !output.status.success() && !has_only_trivial_errors {
             return Err(HandlerError::CompilationFailed(format!(
@@ -84,12 +92,66 @@ impl Handler {
             )));
         }
 
-        // If only trivial errors, proceed with the output (which is empty for defn without body)
-        // When there's no output, return a default response based on route
-        // Extract the actual term value from the route file
         let response = Self::extract_response_from_route(&self.route_file);
 
         Ok(response)
+    }
+
+    async fn execute_rbv_route(&self) -> HandlerResult {
+        let project_root = self.calculate_project_root();
+        
+        let build_dir = project_root.join("public/build");
+        std::fs::create_dir_all(&build_dir).map_err(|e| HandlerError::Io(e.to_string()))?;
+
+        let stem = self.file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("page");
+        let output_file = build_dir.join(format!("{}.html", stem));
+
+        let brief_compiler = BriefCompiler::new()
+            .map_err(|e| HandlerError::BriefCompiler(e.to_string()))?;
+
+        let output = Command::new(&brief_compiler.path())
+            .args([
+                "rbv",
+                "--out",
+                build_dir.to_str().unwrap(),
+                self.file_path.to_str().unwrap(),
+            ])
+            .output()
+            .map_err(|e| HandlerError::BriefCompiler(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(HandlerError::CompilationFailed(format!(
+                "RBV compilation failed: {}",
+                stderr
+            )));
+        }
+
+        if output_file.exists() {
+            let html = std::fs::read_to_string(&output_file)
+                .map_err(|e| HandlerError::Io(e.to_string()))?;
+            Ok(Response::new(200, html))
+        } else {
+            Ok(Response::new(200, "<html><body>RBV compiled but no output</body></html>".to_string()))
+        }
+    }
+
+    fn calculate_project_root(&self) -> PathBuf {
+        // Walk up from the route file until we find a directory with codicil.toml or .codicil
+        let mut current = self.file_path.parent().map(|p| p.to_path_buf());
+        
+        while let Some(dir) = current {
+            if dir.join("codicil.toml").exists() || dir.join(".codicil").exists() {
+                return dir;
+            }
+            current = dir.parent().map(|p| p.to_path_buf());
+        }
+        
+        // Fallback: assume src/ is at project root
+        self.file_path.parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| self.file_path.clone())
     }
 
     fn extract_response_from_route(route_file: &RouteFile) -> Response {
@@ -225,14 +287,15 @@ impl ErrorHandler {
         std::fs::write(&context_file, context_json.to_string())
             .map_err(|e| HandlerError::Io(e.to_string()))?;
 
-        let brief_path = std::env::var("BRIEF_PATH").unwrap_or_else(|_| "brief".to_string());
+        let brief_compiler = BriefCompiler::new()
+            .map_err(|e| HandlerError::BriefCompiler(e.to_string()))?;
 
-        let output = Command::new(&brief_path)
+        let output = Command::new(&brief_compiler.path())
             .arg("build")
             .arg(&temp_file)
             .output()
             .map_err(|e| {
-                eprintln!("ERROR: Failed to run Brief compiler at '{}': {}", brief_path, e);
+                eprintln!("ERROR: Failed to run Brief compiler at '{}': {}", brief_compiler.path().display(), e);
                 HandlerError::BriefCompiler(e.to_string())
             })?;
 

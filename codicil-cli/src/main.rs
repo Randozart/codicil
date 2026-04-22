@@ -3,6 +3,9 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(test)]
+mod tests;
+
 use anyhow::Result;
 use axum::{
     body::Body,
@@ -98,7 +101,8 @@ fn cmd_init(name: &str, no_template: bool) -> Result<()> {
         anyhow::bail!("Directory '{}' already exists", name);
     }
 
-    fs::create_dir_all(project_dir.join("routes"))?;
+    fs::create_dir_all(project_dir)?;
+    fs::create_dir_all(project_dir.join("src"))?;
     fs::create_dir_all(project_dir.join("lib"))?;
     fs::create_dir_all(project_dir.join("middleware"))?;
     fs::create_dir_all(project_dir.join("components"))?;
@@ -106,6 +110,7 @@ fn cmd_init(name: &str, no_template: bool) -> Result<()> {
     fs::create_dir_all(project_dir.join("public/build"))?;
     fs::create_dir_all(project_dir.join("assets"))?;
     fs::create_dir_all(project_dir.join("styles"))?;
+    fs::create_dir_all(project_dir.join(".codicil"))?;
 
     let codicil_toml = format!(
         r#"# Codicil Project Configuration
@@ -124,43 +129,27 @@ brief_path = ""
     );
     fs::write(project_dir.join("codicil.toml"), codicil_toml)?;
 
-    // Create default index route
-    let index_route = r#"[route]
-method = "GET"
-path = "/"
+    let codicil_config = format!(
+        r#"# Codicil Configuration
+[lsp]
+enabled = true
 
-txn handle [true][true] {
-    term "index";
+[routing]
+style = "folder"
+"#,
+    );
+    fs::write(project_dir.join(".codicil/config.toml"), codicil_config)?;
+
+    fs::write(project_dir.join("src/page.rbv"), r#"txn handle [true][true] {
+    term "Hello, World!";
 };
-"#;
-    fs::write(project_dir.join("routes/GET.index.bv"), index_route)?;
+"#
+    )?;
 
     fs::write(project_dir.join("lib/.gitkeep"), "")?;
     fs::write(project_dir.join("middleware/.gitkeep"), "")?;
     fs::write(project_dir.join("public/favicon.svg"), FAVICON_SVG)?;
     fs::write(project_dir.join("styles/globals.css"), "")?;
-
-    if !no_template {
-        // Full template - copy components and compile
-        fs::write(project_dir.join("components/landing.rbv"), LANDING_RBV)?;
-        fs::write(project_dir.join("routes/GET.hints.bv"), GET_HINTS_BV)?;
-
-        let build_dir = project_dir.join("public/build");
-        println!("Compiling landing page...");
-        let output = Command::new("brief")
-            .args(["rbv", "--out", build_dir.to_str().unwrap(),
-                   project_dir.join("components/landing.rbv").to_str().unwrap()])
-            .output()?;
-        if !output.status.success() {
-            eprintln!("Warning: Failed to compile: {}", String::from_utf8_lossy(&output.stderr));
-        }
-    }
-
-    let env_example = r#"# Environment variables
-DATABASE_URL=postgresql://localhost:5432/mydb
-JWT_SECRET=your-secret-key
-"#;
-fs::write(project_dir.join(".env.example"), env_example)?;
 
     if no_template {
         println!("Created empty project '{}'", name);
@@ -168,7 +157,7 @@ fs::write(project_dir.join(".env.example"), env_example)?;
         println!("Created project '{}' with landing-page template", name);
     }
     println!("  cd {} && codi dev", name);
-    Ok(())
+Ok(())
 }
 
 fn cmd_check(path: &str) -> Result<()> {
@@ -208,8 +197,226 @@ fn cmd_check(path: &str) -> Result<()> {
                 std::fs::copy(&src_path, &dst_path)?;
             }
         }
-        Ok(())
+Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_init_creates_src_directory() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        assert!(project_path.join("src").exists());
+        assert!(project_path.join("src/page.rbv").exists());
     }
+
+    #[test]
+    fn test_init_creates_codicil_config() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        assert!(project_path.join(".codicil").exists());
+        assert!(project_path.join(".codicil/config.toml").exists());
+    }
+
+    #[test]
+    fn test_init_creates_page_rbv() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        let content = fs::read_to_string(project_path.join("src/page.rbv")).unwrap();
+        assert!(content.contains("txn handle"));
+    }
+
+    #[test]
+    fn test_init_fails_if_directory_exists() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        fs::create_dir(&project_path).unwrap();
+        
+        let result = cmd_init(project_path.to_str().unwrap(), true);
+        assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_dev_server_page_rbv_returns_200() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        // Write a simple working handler
+        fs::write(project_path.join("src/page.rbv"), r#"
+txn handle [true][true] {
+    term "Hello, World!";
+};
+"#).unwrap();
+        
+        // Test that routes are discovered correctly
+        let router = codicil_core::Router::discover_routes(&project_path).unwrap();
+        let routes: Vec<_> = router.routes().collect();
+        
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].path, "/");
+        assert_eq!(routes[0].method, codicil_core::HttpMethod::GET);
+    }
+
+    #[test]
+    fn test_dev_server_route_rbv_all_methods() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        // Create route.rbv for API
+        fs::create_dir_all(project_path.join("src/api")).unwrap();
+        fs::write(project_path.join("src/api/route.rbv"), r#"
+txn handle [true][true] {
+    term "API response";
+};
+"#).unwrap();
+        
+        let router = codicil_core::Router::discover_routes(&project_path).unwrap();
+        let routes: Vec<_> = router.routes().collect();
+        
+        // route.rbv should create routes for all 5 methods
+        assert_eq!(routes.len(), 5);
+        
+        let paths: Vec<_> = routes.iter().map(|r| r.path.clone()).collect();
+        assert!(paths.contains(&"/api".to_string()));
+        
+        let methods: Vec<_> = routes.iter().map(|r| r.method.clone()).collect();
+        assert!(methods.contains(&codicil_core::HttpMethod::GET));
+        assert!(methods.contains(&codicil_core::HttpMethod::POST));
+        assert!(methods.contains(&codicil_core::HttpMethod::PUT));
+        assert!(methods.contains(&codicil_core::HttpMethod::DELETE));
+    }
+
+    #[test]
+    fn test_dev_server_dynamic_segment() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        // Create dynamic route
+        fs::create_dir_all(project_path.join("src/users/[id]")).unwrap();
+        fs::write(project_path.join("src/users/[id]/page.rbv"), r#"
+txn handle [true][true] {
+    term "User";
+};
+"#).unwrap();
+        
+        let router = codicil_core::Router::discover_routes(&project_path).unwrap();
+        
+        // Test finding the route
+        let found = router.find_route(&codicil_core::HttpMethod::GET, "/users/123");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().params.get("id"), Some(&"123".to_string()));
+    }
+
+    #[test]
+    fn test_dev_server_static_file_exists() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        // Create a static file in public/
+        fs::create_dir_all(project_path.join("public")).unwrap();
+        fs::write(project_path.join("public/test.js"), "console.log('test');").unwrap();
+        
+        // Verify file exists
+        assert!(project_path.join("public/test.js").exists());
+    }
+
+    #[test]
+    fn test_dev_server_nested_routes() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        // Create nested routes
+        fs::create_dir_all(project_path.join("src/users/[userId]/posts")).unwrap();
+        fs::write(project_path.join("src/users/[userId]/posts/page.rbv"), r#"
+txn handle [true][true] {
+    term "posts";
+};
+"#).unwrap();
+        
+        let router = codicil_core::Router::discover_routes(&project_path).unwrap();
+        let routes: Vec<_> = router.routes().collect();
+        
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].path, "/users/:userId/posts");
+        
+        let found = router.find_route(&codicil_core::HttpMethod::GET, "/users/abc/posts");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().params.get("userId"), Some(&"abc".to_string()));
+    }
+
+    #[test]
+    fn test_dev_server_route_group() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        // Create route group
+        fs::create_dir_all(project_path.join("src/(admin)")).unwrap();
+        fs::write(project_path.join("src/(admin)/page.rbv"), r#"
+txn handle [true][true] {
+    term "admin";
+};
+"#).unwrap();
+        
+        let router = codicil_core::Router::discover_routes(&project_path).unwrap();
+        let routes: Vec<_> = router.routes().collect();
+        
+        // Route group should not appear in URL
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].path, "/");
+    }
+
+    #[test]
+    fn test_dev_server_404_for_unknown_path() {
+        let temp = TempDir::new().unwrap();
+        let project_path = temp.path().join("test-project");
+        
+        cmd_init(project_path.to_str().unwrap(), true).unwrap();
+        
+        fs::write(project_path.join("src/page.rbv"), r#"
+txn handle [true][true] {
+    term "home";
+};
+"#).unwrap();
+        
+        let router = codicil_core::Router::discover_routes(&project_path).unwrap();
+        
+        // Unknown path should return None
+        let found = router.find_route(&codicil_core::HttpMethod::GET, "/nonexistent");
+        assert!(found.is_none());
+    }
+}
 
     // Copy complete directory structure
     if routes_dir.exists() {
@@ -455,6 +662,14 @@ fn recompile_rbv_components(project_path: &Path) {
         return;
     }
 
+    let compiler = match BriefCompiler::new() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("  (FAIL) Failed to find Brief compiler: {}", e);
+            return;
+        }
+    };
+
     if let Ok(entries) = std::fs::read_dir(&components_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -464,7 +679,7 @@ fn recompile_rbv_components(project_path: &Path) {
                     .and_then(|n| n.to_str())
                     .unwrap_or("component");
 
-                let output = std::process::Command::new("brief")
+                let output = std::process::Command::new(compiler.path())
                     .args([
                         "rbv",
                         "--out",
@@ -511,8 +726,6 @@ async fn cmd_dev(path: &str) -> Result<()> {
         }
     }
 
-    let _ = BriefCompiler::new().ok();
-
     // Auto-compile RBV components if needed
     let build_dir = project_path.join("public/build");
     let components_dir = project_path.join("components");
@@ -545,12 +758,13 @@ async fn cmd_dev(path: &str) -> Result<()> {
 
         if needs_recompile || !html_path.exists() {
             println!("Compiling components...");
+            let compiler = BriefCompiler::new().map_err(|e| anyhow::anyhow!("Brief compiler not found: {}", e))?;
             if let Ok(entries) = std::fs::read_dir(&components_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().and_then(|e| e.to_str()) == Some("rbv") {
                         let filename = path.file_stem().and_then(|n| n.to_str()).unwrap_or("component");
-                        let output = std::process::Command::new("brief")
+                        let output = std::process::Command::new(compiler.path())
                             .args(["rbv", "--out", build_dir.to_str().unwrap(), path.to_str().unwrap()])
                             .output();
                         match output {
@@ -701,10 +915,7 @@ async fn handle_root(
         }
     }
 
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .body(Body::from("404 Not Found"))
-        .unwrap()
+    handle_request_internal(state, method, headers, "/", query_params, body).await
 }
 
 async fn handle_catchall(

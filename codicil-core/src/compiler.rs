@@ -23,6 +23,10 @@ impl BriefCompiler {
         Ok(Self { path })
     }
 
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
     pub fn with_path(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -46,12 +50,22 @@ impl BriefCompiler {
             return Ok(local_path);
         }
 
+        // Check brief-compiler project build (for development)
+        if let Ok(home) = std::env::var("HOME") {
+            let project_path = PathBuf::from(format!("{}/Desktop/Projects/brief-compiler/target/release/brief-compiler", home));
+            if project_path.exists() {
+                return Ok(project_path);
+            }
+        }
+
         // Check various common installation paths
         let search_paths = vec![
+            PathBuf::from("$HOME/.cargo/bin/brief-compiler"),
+            PathBuf::from("$HOME/.cargo/bin/brief"),
+            PathBuf::from("$HOME/.local/bin/brief-compiler"),
+            PathBuf::from("$HOME/.local/bin/brief"),
             PathBuf::from("/usr/local/bin/brief"),
             PathBuf::from("/usr/bin/brief"),
-            PathBuf::from("$HOME/.cargo/bin/brief"),
-            PathBuf::from("$HOME/.local/bin/brief"),
         ];
 
         for path in search_paths {

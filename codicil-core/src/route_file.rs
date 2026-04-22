@@ -239,4 +239,61 @@ txn handle [true][post] {
         assert_eq!(route.method, "GET");
         assert_eq!(route.middleware, vec!["cors", "auth"]);
     }
+
+    #[test]
+    fn test_parse_page_rbv_default_method() {
+        let content = r#"
+txn handle [true][true] {
+    term "Hello";
+};
+"#;
+        let route = RouteFile::parse_content(content, Path::new("page.bv")).unwrap();
+        // page.rbv defaults to GET
+        assert_eq!(route.method, "GET");
+        assert_eq!(route.path, "/");
+        assert!(route.brief_code.contains("txn handle"));
+    }
+
+    #[test]
+    fn test_parse_route_rbv_all_methods() {
+        let content = r#"
+txn handle_get [true][true] {
+    term "GET";
+};
+
+txn handle_post [true][true] {
+    term "POST";
+};
+"#;
+        let route = RouteFile::parse_content(content, Path::new("route.bv")).unwrap();
+        // route.rbv defaults to GET
+        assert_eq!(route.method, "GET");
+        assert_eq!(route.path, "/");
+    }
+
+    #[test]
+    fn test_parse_with_precondition() {
+        let content = r#"
+[pre]
+user.authenticated == true
+
+txn handle [pre][true] {
+    term "secure";
+};
+"#;
+        let route = RouteFile::parse_content(content, Path::new("test.bv")).unwrap();
+        assert!(route.precondition.contains("user.authenticated"));
+    }
+
+    #[test]
+    fn test_parse_empty_brief_code() {
+        let content = r#"
+[route]
+method = "GET"
+path = "/"
+"#;
+        let route = RouteFile::parse_content(content, Path::new("test.bv")).unwrap();
+        // Should have default handler
+        assert!(route.brief_code.contains("defn handle"));
+    }
 }
